@@ -9,19 +9,37 @@ const router = express.Router();
 // Verify Shopify HMAC using raw body (express.raw is mounted in server.js)
 function verifyHmac(req) {
   try {
+    // Shopify header (Base64 of the raw HMAC digest)
     const hmacHeader = req.get('X-Shopify-Hmac-Sha256') || '';
+    // IMPORTANT: use the exact raw body bytes (Buffer), no JSON parsing before this
     const rawBody = req.body; // Buffer from express.raw
-    const digest = crypto
-      .createHmac('sha256', process.env.SHOPIFY_API_SECRET || '')
-      .update(rawBody, 'utf8')
-      .digest('base64');
+    // Trim in case env has stray whitespace/newline
+    const secret = (process.env.SHOPIFY_API_SECRET || '').trim();
 
-    if (hmacHeader.length !== digest.length) return false;
-    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
-  } catch {
+    // Compute digest as raw bytes, not as a base64 string
+    const computed = crypto.createHmac('sha256', secret).update(rawBody).digest(); // Buffer
+    const received = Buffer.from(hmacHeader, 'base64'); // Buffer
+
+    if (received.length !== computed.length) {
+      console.error('HMAC length mismatch', { receivedLen: received.length, computedLen: computed.length });
+      return false;
+    }
+
+    const ok = crypto.timingSafeEqual(received, computed);
+    if (!ok) {
+      // tiny, safe debug: show short prefixes so we can see differences without leaking full values
+      console.error('HMAC mismatch', {
+        recvPrefix: hmacHeader.slice(0, 8),
+        compPrefix: computed.toString('base64').slice(0, 8)
+      });
+    }
+    return ok;
+  } catch (e) {
+    console.error('HMAC verify error', e.message);
     return false;
   }
 }
+
 
 // Debug route (no HMAC)
 router.post('/ping', express.json(), (req, res) => {
