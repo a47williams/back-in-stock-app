@@ -1,73 +1,52 @@
-// back-in-stock-app/server.js
-
-// Load env first
-require('dotenv').config();
-
+// server.js
 const express = require('express');
-const mongoose = require('mongoose');
-const session = require('express-session');
 const cors = require('cors');
-const path = require('path');
+const dotenv = require('dotenv');
+const mongoose = require('mongoose');
 
-// Routes
-const authRoutes = require('./routes/auth');
-const alertRoutes = require('./routes/alert');
-const webhookRoutes = require('./routes/webhook');
-const testRoutes = require('./routes/test'); // optional: manual WhatsApp test
+dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-/**
- * CORS (so your storefront can POST to /alerts/register)
- */
+// --- CORS early (so Shopify/storefront can call us) ---
 app.use(cors({ origin: true }));
 
-/**
- * IMPORTANT:
- * - Shopify webhooks require HMAC verification on the RAW body.
- * - Mount raw body parser ONLY for /webhook before JSON parser.
- */
-app.use('/webhook', express.raw({ type: 'application/json' }));
+// --- WEBHOOKS MUST USE RAW BODY (before any JSON parser) ---
+const webhookRoutes = require('./routes/webhook');
+app.use('/webhook', express.raw({ type: 'application/json' })); // keep raw for Shopify HMAC
+app.use('/webhook', webhookRoutes);
 
-/**
- * Normal JSON for everything else
- */
+// --- Normal JSON parsing for all other routes AFTER webhook raw ---
 app.use(express.json());
 
-/**
- * Sessions + static + (optional) views
- */
-app.use(session({ secret: 'keyboardcat', resave: false, saveUninitialized: true }));
-app.use(express.static('public'));
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
+// --- App routes (keep these after express.json) ---
+const alertRoutes = require('./routes/alert');
+const authRoutes  = require('./routes/auth');
 
-/**
- * MongoDB
- */
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch((err) => console.error('MongoDB error', err));
-
-/**
- * Routes
- */
-app.use('/auth', authRoutes);
 app.use('/alerts', alertRoutes);
-app.use('/webhook', webhookRoutes);
-app.use('/test', testRoutes); // optional
+app.use('/auth', authRoutes);
 
-/**
- * Health routes
- */
-app.get('/', (_req, res) => res.send('✅ App running!'));
-app.get('/health', (_req, res) => res.json({ ok: true }));
+// --- Health & root ---
+app.get('/', (req, res) => res.send('✅ App running!'));
+app.get('/health', (req, res) => res.json({ ok: true }));
 
-/**
- * Start server
- */
+// --- MongoDB ---
+async function connectMongo() {
+  if (!process.env.MONGO_URI) {
+    console.warn('⚠️  MONGO_URI missing; skipping Mongo connect');
+    return;
+  }
+  try {
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log('✅ MongoDB connected');
+  } catch (err) {
+    console.error('❌ MongoDB connection error:', err.message);
+  }
+}
+connectMongo();
+
+// --- Start server ---
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server started at http://localhost:${PORT}`);
 });
