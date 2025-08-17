@@ -8,29 +8,32 @@ dotenv.config();
 
 const app = express();
 
-// --- CORS early (so Shopify/storefront can call us) ---
+// -------- CORS (allow storefront + Shopify) --------
 app.use(cors({ origin: true }));
 
-// --- WEBHOOKS MUST USE RAW BODY (before any JSON parser) ---
-const webhookRoutes = require('./routes/webhook');
-app.use('/webhook', express.raw({ type: 'application/json' })); // keep raw for Shopify HMAC
+// -------- Body parser switch: RAW for /webhook, JSON for everything else --------
+app.use((req, res, next) => {
+  if (req.path.startsWith('/webhook')) {
+    // Shopify requires the exact raw bytes for HMAC verification
+    return express.raw({ type: 'application/json' })(req, res, next);
+  }
+  return express.json()(req, res, next);
+});
+
+// -------- Routes --------
+const webhookRoutes = require('./routes/webhook'); // expects raw body
 app.use('/webhook', webhookRoutes);
 
-// --- Normal JSON parsing for all other routes AFTER webhook raw ---
-app.use(express.json());
-
-// --- App routes (keep these after express.json) ---
-const alertRoutes = require('./routes/alert');
-const authRoutes  = require('./routes/auth');
-
+const alertRoutes = require('./routes/alert');     // normal JSON
+const authRoutes  = require('./routes/auth');      // normal JSON
 app.use('/alerts', alertRoutes);
 app.use('/auth', authRoutes);
 
-// --- Health & root ---
-app.get('/', (req, res) => res.send('✅ App running!'));
-app.get('/health', (req, res) => res.json({ ok: true }));
+// Health & root
+app.get('/', (_req, res) => res.send('✅ App running!'));
+app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// --- MongoDB ---
+// -------- MongoDB --------
 async function connectMongo() {
   if (!process.env.MONGO_URI) {
     console.warn('⚠️  MONGO_URI missing; skipping Mongo connect');
@@ -45,7 +48,7 @@ async function connectMongo() {
 }
 connectMongo();
 
-// --- Start server ---
+// -------- Start server --------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server started at http://localhost:${PORT}`);
