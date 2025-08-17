@@ -1,13 +1,12 @@
 // routes/webhook.js
 const express = require('express');
 const crypto = require('crypto');
+const Alert = require('../models/Alert');
+const sendWhatsApp = require('../utils/sendWhatsApp');
 
 const router = express.Router();
 
-/**
- * Verify Shopify HMAC using raw body.
- * NOTE: express.raw() must be mounted in server.js BEFORE this router.
- */
+// Verify Shopify HMAC using raw body (express.raw is mounted in server.js)
 function verifyHmac(req) {
   try {
     const hmacHeader = req.get('X-Shopify-Hmac-Sha256') || '';
@@ -17,7 +16,6 @@ function verifyHmac(req) {
       .update(rawBody, 'utf8')
       .digest('base64');
 
-    // timingSafeEqual only if both buffers same length
     if (hmacHeader.length !== digest.length) return false;
     return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
   } catch {
@@ -25,24 +23,21 @@ function verifyHmac(req) {
   }
 }
 
-/**
- * TEMP debug endpoint to prove the router is reachable without HMAC.
- * You can create a webhook pointing to /webhook/ping or curl it directly.
- */
+// Debug route (no HMAC)
 router.post('/ping', express.json(), (req, res) => {
   console.log('🔔 /webhook/ping hit', { body: req.body });
   return res.status(200).json({ ok: true });
 });
 
-/**
- * Inventory webhook (Shopify "Inventory levels update").
- * Expects raw JSON body; we verify HMAC unless SKIP_HMAC=true in env.
- */
+// Inventory levels update webhook
 router.post('/inventory', async (req, res) => {
   try {
+    const topic = req.get('X-Shopify-Topic');
+    const shop = req.get('X-Shopify-Shop-Domain');
+
     console.log('📦 /webhook/inventory received', {
-      topic: req.get('X-Shopify-Topic'),
-      shop: req.get('X-Shopify-Shop-Domain'),
+      topic,
+      shop,
       hmacPresent: !!req.get('X-Shopify-Hmac-Sha256'),
       length: req.get('content-length'),
     });
@@ -56,13 +51,48 @@ router.post('/inventory', async (req, res) => {
       console.warn('⚠️ HMAC verification skipped (SKIP_HMAC=true)');
     }
 
-    // Parse after (or instead of) verification
+    // Parse payload
     const payload = JSON.parse(req.body.toString('utf8'));
-    console.log('🧾 inventory payload keys:', Object.keys(payload));
+    // Inventory webhook payloads include inventory_item_id and available (or adjustment)
+    const inventory_item_id = String(payload.inventory_item_id || '');
+    const available = Number(payload.available ?? 0);
 
-    // TODO: tie this payload to your alert logic (variant / inventory_item mapping)
-    // For Fix A we only prove routing/logging works:
-    console.log('✅ inventory webhook processed');
+    console.log(`🧾 Parsed: inventory_item_id=${inventory_item_id}, available=${available}`);
+
+    if (!inventory_item_id) {
+      console.warn('No inventory_item_id on payload — nothing to do.');
+      return res.status(200).send('ok');
+    }
+
+    if (available <= 0) {
+      console.log('Inventory not positive; skip notifications.');
+      return res.status(200).send('ok');
+    }
+
+    // Find alerts for this inventory item, not already sent
+    const match = { inventory_item_id, sent: false };
+    if (shop) match.shop = shop; // if Shopify sent shop header, narrow by shop
+
+    const alerts = await Alert.find(match);
+    console.log(`🔎 Found ${alerts.length} pending alert(s) for ${inventory_item_id}`);
+
+    // Send WhatsApp + mark as sent
+    for (const a of alerts) {
+      try {
+        const msg = `✅ Back in stock! Your item is available again. (Variant ${a.variantId})`;
+        const ok = await sendWhatsApp(a.phone, msg);
+        if (ok) {
+          a.sent = true;
+          await a.save();
+          console.log(`📲 Notified ${a.phone} for variant ${a.variantId}`);
+        } else {
+          console.warn(`⚠️ WhatsApp send failed for ${a.phone}`);
+        }
+      } catch (err) {
+        console.error('💥 Notify error:', err.message || err);
+      }
+    }
+
     return res.status(200).send('ok');
   } catch (err) {
     console.error('💥 inventory handler error:', err);
