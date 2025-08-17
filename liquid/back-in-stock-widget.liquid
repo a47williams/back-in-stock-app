@@ -1,0 +1,26 @@
+<div id="back-in-stock-widget" style="margin-top:20px;">
+  <p id="bis-status" style="color: green; font-weight: bold;"></p>
+  <input type="tel" id="bis-phone" placeholder="Enter phone (WhatsApp)" style="margin-bottom:5px; display:block;">
+  <input type="email" id="bis-email" placeholder="or enter email" style="margin-bottom:5px; display:block;">
+  <button onclick="submitBackInStock()" style="padding:8px 12px; background:#2c7be5; color:white; border:none; cursor:pointer;">
+    Notify Me
+  </button>
+</div>
+
+<script>
+  async function submitBackInStock() {
+    const phone = document.getElementById('bis-phone').value;
+    const email = document.getElementById('bis-email').value;
+    const variantId = {{ product.selected_or_first_available_variant.id }};
+    const productId = {{ product.id }};
+
+    const response = await fetch('https://e1a9729def84.ngrok-free.app/alerts/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId, variantId, phone, email })
+    });
+
+    document.getElementById('bis-status').textContent =
+      response.ok ? '✅ You’ll be notified!' : '❌ Something went wrong.';
+  }
+</script>
