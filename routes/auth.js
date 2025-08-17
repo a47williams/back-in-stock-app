@@ -1,105 +1,80 @@
-// back-in-stock-app/routes/auth.js
+// routes/auth.js
 const express = require('express');
-const router = express.Router();
-const crypto = require('crypto');
 const axios = require('axios');
+const crypto = require('crypto');
 
-const apiVersion = process.env.SHOPIFY_API_VERSION || '2023-10';
+const Shop = require('../models/Shop');
 
-function getEnvOrFail() {
-  const out = {
-    apiKey: process.env.SHOPIFY_API_KEY,
-    apiSecret: process.env.SHOPIFY_API_SECRET,
-    scopes: process.env.SCOPES,
-    host: process.env.HOST,
-  };
-  const missing = Object.entries(out)
-    .filter(([, v]) => !v)
-    .map(([k]) => k);
-  return { ...out, missing };
-}
+const router = express.Router();
 
+const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
+const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
+const SCOPES = process.env.SCOPES || 'read_products,read_inventory,write_customers';
+const HOST = process.env.HOST; // e.g. https://back-in-stock-app.onrender.com
+
+// 1) Install link: /auth/install?shop=<store>.myshopify.com
 router.get('/install', (req, res) => {
-  const { apiKey, scopes, host, missing } = getEnvOrFail();
-  if (missing.length) {
-    return res
-      .status(500)
-      .send(`Missing env vars: ${missing.join(', ')}. Check your .env and restart the server.`);
-  }
+  const { shop } = req.query;
+  if (!shop) return res.status(400).send('Missing shop');
 
-  const shop = (req.query.shop || '').trim();
-  if (!shop || !shop.endsWith('.myshopify.com')) {
-    return res.status(400).send('Missing or invalid ?shop=<store>.myshopify.com');
-  }
+  const state = crypto.randomBytes(16).toString('hex');
+  const redirectUri = `${HOST}/auth/callback`;
 
-  const state = crypto.randomBytes(8).toString('hex');
-  const redirectUri = `${host}/auth/callback`;
+  const installUrl =
+    `https://${shop}/admin/oauth/authorize` +
+    `?client_id=${SHOPIFY_API_KEY}` +
+    `&scope=${encodeURIComponent(SCOPES)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&state=${state}`;
 
-  const installUrl = new URL(`https://${shop}/admin/oauth/authorize`);
-  installUrl.searchParams.set('client_id', apiKey);
-  installUrl.searchParams.set('scope', scopes);
-  installUrl.searchParams.set('state', state);
-  installUrl.searchParams.set('redirect_uri', redirectUri);
-
-  return res.redirect(installUrl.toString());
+  return res.redirect(installUrl);
 });
 
+// 2) OAuth callback: exchanges code → access token, saves it, registers webhook
 router.get('/callback', async (req, res) => {
-  const { apiKey, apiSecret, host, missing } = getEnvOrFail();
-  if (missing.length) {
-    return res
-      .status(500)
-      .send(`Missing env vars: ${missing.join(', ')}. Check your .env and restart the server.`);
-  }
-
-  const { shop, code } = req.query;
-  if (!shop || !code) return res.status(400).send('Missing shop or code');
-
   try {
+    const { shop, code } = req.query;
+    if (!shop || !code) return res.status(400).send('Missing shop or code');
+
     // Exchange code for token
     const tokenResp = await axios.post(`https://${shop}/admin/oauth/access_token`, {
-      client_id: apiKey,
-      client_secret: apiSecret,
-      code,
-    });
+      client_id: SHOPIFY_API_KEY,
+      client_secret: SHOPIFY_API_SECRET,
+      code
+    }, { headers: { 'Content-Type': 'application/json' } });
+
     const accessToken = tokenResp.data.access_token;
 
-    req.session.shop = shop;
-    req.session.accessToken = accessToken;
-
-    // Idempotent webhook upsert for products/update
-    const headers = {
-      'X-Shopify-Access-Token': accessToken,
-      'Content-Type': 'application/json',
-    };
-    const address = `${host}/webhook/inventory`;
-    const topic = 'products/update';
-
-    const list = await axios.get(
-      `https://${shop}/admin/api/${apiVersion}/webhooks.json?topic=${encodeURIComponent(topic)}`,
-      { headers }
+    // ✅ Save or update token for this shop
+    await Shop.findOneAndUpdate(
+      { shop },
+      { shop, accessToken },
+      { upsert: true, new: true }
     );
-    const existing = (list.data?.webhooks || []).find(w => w.address === address);
 
-    if (!existing) {
+    // Register webhook: Inventory levels update → our Render URL
+    try {
       await axios.post(
-        `https://${shop}/admin/api/${apiVersion}/webhooks.json`,
-        { webhook: { topic, address, format: 'json' } },
-        { headers }
+        `https://${shop}/admin/api/2025-07/webhooks.json`,
+        {
+          webhook: {
+            topic: 'inventory_levels/update',
+            address: `${HOST}/webhook/inventory`,
+            format: 'json'
+          }
+        },
+        { headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' } }
       );
-      console.log(`✅ Webhook created -> ${address}`);
-    } else {
-      console.log(`🔁 Webhook exists (${existing.id}) -> ${address}`);
+      console.log('✅ Webhook registered for inventory_levels/update');
+    } catch (e) {
+      console.error('⚠️ Webhook register failed:', e.response?.data || e.message);
     }
 
-    return res.send('✅ App installed & webhook registered. You can close this tab.');
-  } catch (error) {
-    console.error('OAuth/webhook error', {
-      status: error?.response?.status,
-      data: error?.response?.data,
-      message: error.message,
-    });
-    return res.status(500).send('OAuth/webhook failed — see server logs.');
+    // Simple success page
+    return res.status(200).send('✅ App installed & webhook registered. You can close this tab.');
+  } catch (err) {
+    console.error('OAuth/webhook error:', err.response?.data || err.message);
+    return res.status(500).send('OAuth/webhook failed');
   }
 });
 
