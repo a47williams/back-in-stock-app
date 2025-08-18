@@ -1,103 +1,145 @@
 // routes/alert.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const Alert = require('../models/Alert');
 
-// normalize numeric id from gid or number
-function normalizeId(id) {
-  if (!id) return null;
-  const s = String(id);
-  const m = s.match(/(\d+)$/);
-  return m ? m[1] : s;
+const Alert = require("../models/Alert");
+const { getVariantInventoryId } = require("../utils/shopifyApi");
+
+// Helper: normalize shop domain
+function normalizeShop(shop) {
+  if (!shop) return null;
+  return shop.trim().toLowerCase();
 }
 
-// Simple health for this router (reachable at /alerts/healthz)
-router.get('/healthz', (_req, res) => res.json({ ok: true, scope: 'alerts' }));
-
-// POST /alerts/register
-router.post('/register', express.json(), async (req, res) => {
+/**
+ * POST /alerts/register
+ * Body: { shop, productId, variantId, phone }
+ * Saves/updates alert with the resolved inventory_item_id for that variant.
+ */
+router.post("/register", express.json(), async (req, res) => {
   try {
-    let shop =
-      (req.body && req.body.shop) ||
-      req.get('X-Shopify-Shop-Domain') ||
-      process.env.SHOPIFY_SHOP || null;
+    const { shop: rawShop, productId, variantId, phone } = req.body || {};
+    const shop =
+      normalizeShop(rawShop) ||
+      normalizeShop(req.headers["x-shop-domain"]) ||
+      null;
 
-    const productId = normalizeId(req.body?.productId);
-    const variantId = normalizeId(req.body?.variantId);
-    const phone     = (req.body?.phone || '').trim();
-
-    if (!shop || !variantId || !phone) {
-      console.error('register missing fields:', { shop, variantId, phone });
-      return res.status(400).json({ error: 'Missing shop, variantId or phone' });
+    if (!shop) {
+      console.error("register missing fields:", {
+        shop: rawShop || null,
+        productId,
+        variantId,
+        phone,
+      });
+      return res
+        .status(400)
+        .json({ ok: false, error: "Missing shop domain on register" });
+    }
+    if (!productId || !variantId || !phone) {
+      console.error("register missing fields:", {
+        shop,
+        productId,
+        variantId,
+        phone,
+      });
+      return res
+        .status(400)
+        .json({ ok: false, error: "productId, variantId and phone required" });
     }
 
-    await Alert.findOneAndUpdate(
-      { shop, variantId, phone },
-      { shop, productId, variantId, phone, sent: false },
-      { upsert: true, new: true }
-    );
-
-    console.log('✅ Alert saved', { shop, variantId, phone });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('❌ Error saving alert', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// GET /alerts/debug/list
-router.get('/debug/list', async (_req, res) => {
-  try {
-    const docs = await Alert.find().lean();
-    res.json(docs.map(d => ({
-      shop: d.shop,
-      productId: d.productId,
-      variantId: d.variantId,
-      inventory_item_id: d.inventory_item_id,
-      phone: d.phone,
-      sent: d.sent,
-      createdAt: d.createdAt,
-      updatedAt: d.updatedAt,
-    })));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-// GET /alerts/debug/clear (DANGER: wipes all alerts)
-router.get('/debug/clear', async (_req, res) => {
-  const r = await Alert.deleteMany({});
-  res.json({ ok: true, deleted: r.deletedCount });
-});
-// --- TEMP DEBUG ROUTES ---
-// List all alerts
-router.get('/debug/list', async (_req, res) => {
-  const all = await Alert.find({}).sort({ createdAt: -1 }).lean();
-  res.json(all);
-});
-
-// Clear all alerts (DANGER in production)
-router.delete('/debug/clear', async (_req, res) => {
-  const { deletedCount } = await Alert.deleteMany({});
-  res.json({ ok: true, deletedCount });
-});
-
-// Seed a pending alert for a known inventory_item_id
-router.post('/debug/seed', express.json(), async (req, res) => {
-  try {
-    const { shop, inventory_item_id, variantId, phone } = req.body;
-    if (!shop || !inventory_item_id || !phone) {
-      return res.status(400).json({ ok: false, error: 'shop, inventory_item_id, phone required' });
+    // 1) Resolve inventory_item_id for this variant
+    const inventory_item_id = await getVariantInventoryId(shop, String(variantId));
+    if (!inventory_item_id) {
+      console.error("No inventory_item_id for", { shop, variantId });
+      return res
+        .status(400)
+        .json({ ok: false, error: "No inventory_item_id for this variant" });
     }
+
+    // 2) Upsert alert keyed by (shop, inventory_item_id, phone)
     const doc = await Alert.findOneAndUpdate(
       { shop, inventory_item_id, phone },
-      { shop, inventory_item_id, variantId: variantId || null, phone, sent: false },
+      {
+        $set: {
+          shop,
+          productId: String(productId),
+          variantId: String(variantId),
+          inventory_item_id: String(inventory_item_id),
+          phone: String(phone),
+        },
+        $setOnInsert: { sent: false, createdAt: new Date() },
+      },
       { upsert: true, new: true }
     );
-    res.json({ ok: true, doc });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+
+    console.log("✅ Alert saved", {
+      shop,
+      productId,
+      variantId,
+      inventory_item_id,
+      phone,
+      sent: doc?.sent,
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("❌ Error saving alert:", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
-// --- END TEMP DEBUG ---
+
+/**
+ * GET /alerts/debug/list
+ * Optional query: inventory_item_id, shop
+ * Lists alerts so you can confirm saved inventory_item_id matches webhook.
+ */
+router.get("/debug/list", async (req, res) => {
+  try {
+    const q = {};
+    if (req.query.inventory_item_id) {
+      q.inventory_item_id = String(req.query.inventory_item_id);
+    }
+    if (req.query.shop) {
+      q.shop = normalizeShop(req.query.shop);
+    }
+    const alerts = await Alert.find(q)
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json(alerts);
+  } catch (err) {
+    console.error("debug/list error:", err);
+    res.status(500).json({ ok: false, error: "debug list failed" });
+  }
+});
+
+/**
+ * POST /alerts/debug/clear
+ * Body: { inventory_item_id?, shop?, all? }
+ * Deletes matching alerts (useful for cleanup during testing).
+ */
+router.post("/debug/clear", express.json(), async (req, res) => {
+  try {
+    const { inventory_item_id, shop: rawShop, all } = req.body || {};
+    const shop = normalizeShop(rawShop);
+
+    const q = {};
+    if (!all) {
+      if (inventory_item_id) q.inventory_item_id = String(inventory_item_id);
+      if (shop) q.shop = shop;
+      if (!q.inventory_item_id && !q.shop) {
+        return res.status(400).json({
+          ok: false,
+          error: "Provide all=true or inventory_item_id and/or shop",
+        });
+      }
+    }
+
+    const result = await Alert.deleteMany(all ? {} : q);
+    res.json({ ok: true, deleted: result.deletedCount });
+  } catch (err) {
+    console.error("debug/clear error:", err);
+    res.status(500).json({ ok: false, error: "debug clear failed" });
+  }
+});
 
 module.exports = router;
