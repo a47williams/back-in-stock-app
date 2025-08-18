@@ -63,5 +63,10 @@ router.get('/debug/list', async (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// GET /alerts/debug/clear (DANGER: wipes all alerts)
+router.get('/debug/clear', async (_req, res) => {
+  const r = await Alert.deleteMany({});
+  res.json({ ok: true, deleted: r.deletedCount });
+});
 
 module.exports = router;

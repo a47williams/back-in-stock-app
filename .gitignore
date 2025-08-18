@@ -1,15 +1,20 @@
-# Dependencies
+# Node
 node_modules/
-package-lock.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Env & local
+# Env files (secrets!)
 .env
 .env.*.local
-*.log
+
+# OS
 .DS_Store
 
-# Build artifacts
+# Logs
+*.log
+
+# Build / output
 dist/
-.tmp/
 .next/
 coverage/

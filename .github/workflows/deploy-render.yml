@@ -1,5 +1,4 @@
 name: Deploy to Render
-
 on:
   push:
     branches: [ "main" ]
@@ -9,17 +8,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Trigger Render Deploy
         env:
           RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
           if [ -z "$RENDER_DEPLOY_HOOK" ]; then
-            echo "❌ Missing RENDER_DEPLOY_HOOK secret."
+            echo "❌ Missing RENDER_DEPLOY_HOOK repo secret."
             exit 1
           fi
-          echo "Calling Render deploy hook…"
           curl -fsSL -X POST "$RENDER_DEPLOY_HOOK"
-          echo "✅ Deploy hook triggered."
+          echo "✅ Render deploy hook called."
