@@ -1,116 +1,105 @@
 // utils/sendWhatsApp.js
+// Sends a WhatsApp message via Twilio. Supports either a plain text body
+// or a WhatsApp Content Template (ContentSid + ContentVariables).
+
 const twilio = require("twilio");
 
-// --- ENV ---
-const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;           // e.g. ACxxxxxxxx...
-const AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN;            // your auth token
-const FROM_PHONE  = process.env.TWILIO_PHONE_NUMBER || "whatsapp:+14155238886"; // Twilio sandbox default
-const CONTENT_SID = process.env.TWILIO_CONTENT_SID || "";     // e.g. HXxxxxxxxx... (optional)
+const {
+  TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN,
+  TWILIO_PHONE_NUMBER, // must be like: "whatsapp:+14155238886" (sandbox) or your approved WA number
+} = process.env;
 
-// --- BASIC VALIDATION ---
-if (!ACCOUNT_SID?.startsWith?.("AC")) console.warn("⚠️ TWILIO_ACCOUNT_SID missing/invalid");
-if (!AUTH_TOKEN) console.warn("⚠️ TWILIO_AUTH_TOKEN missing");
-if (!FROM_PHONE) console.warn("⚠️ TWILIO_PHONE_NUMBER missing (using sandbox default if available)");
-
-const client = twilio(ACCOUNT_SID, AUTH_TOKEN);
-
-/**
- * Build a human-friendly message, with an add-to-cart link when possible.
- */
-function buildBody({ shop, variantId, style = "friendly" }) {
-  const cartUrl =
-    shop && variantId ? `https://${shop}/cart/${encodeURIComponent(variantId)}:1` : "";
-
-  switch ((style || "friendly").toLowerCase()) {
-    case "formal":
-      return cartUrl
-        ? `Good news — the item you requested is back in stock. You can purchase it here: ${cartUrl}`
-        : `Good news — the item you requested is back in stock.`;
-    case "urgent":
-      return cartUrl
-        ? `🔥 Back in stock now! Limited quantities available. Grab it before it's gone: ${cartUrl}`
-        : `🔥 Back in stock now! Limited quantities available.`;
-    case "friendly":
-    default:
-      return cartUrl
-        ? `Hey! Your item is back in stock 🙌 Tap to buy: ${cartUrl}`
-        : `Hey! Your item is back in stock 🙌`;
+// Create client once (will throw early if creds are missing)
+let client;
+(function ensureClient() {
+  if (!TWILIO_ACCOUNT_SID || !/^AC/.test(TWILIO_ACCOUNT_SID)) {
+    throw new Error("TWILIO_ACCOUNT_SID missing or invalid (must start with AC)");
   }
-}
+  if (!TWILIO_AUTH_TOKEN) {
+    throw new Error("TWILIO_AUTH_TOKEN missing");
+  }
+  if (!TWILIO_PHONE_NUMBER || !TWILIO_PHONE_NUMBER.startsWith("whatsapp:")) {
+    throw new Error(
+      "TWILIO_PHONE_NUMBER missing or invalid. Set to e.g. 'whatsapp:+14155238886'"
+    );
+  }
+  client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+})();
 
 /**
- * Send a WhatsApp message. Uses Content Template if TWILIO_CONTENT_SID is set, otherwise plain Body.
- * @param {string} toPhone E.164 phone with or without "whatsapp:" prefix
- * @param {object} ctx { shop, productId, variantId, style, previewUrl? }
- * @returns {Promise<boolean>}
+ * Send a WhatsApp message.
+ *
+ * @param {string} to E.164 (e.g. +16035551212) OR "whatsapp:+16035551212"
+ * @param {string} [message] Plain text body fallback
+ * @param {object} [opts]
+ * @param {string} [opts.contentSid] Twilio Content Template SID (e.g. HXXXXXXXX)
+ * @param {object|string} [opts.contentVariables] JSON object or string for template variables
+ * @param {string} [opts.mediaUrl] Optional single media URL for body messages
+ * @returns {Promise<{ok:boolean, sid?:string, error?:any}>}
  */
-async function sendWhatsApp(toPhone, ctx = {}) {
+async function sendWhatsApp(to, message = "", opts = {}) {
   try {
-    // normalize WhatsApp addressing
-    const to = toPhone.startsWith("whatsapp:") ? toPhone : `whatsapp:${toPhone}`;
-    const from = FROM_PHONE.startsWith("whatsapp:") ? FROM_PHONE : `whatsapp:${FROM_PHONE}`;
+    // Normalize "to" into whatsapp:+E164
+    const toWhatsApp = to.startsWith("whatsapp:") ? to : `whatsapp:${to}`;
 
-    // build text body (used as fallback or for non-template sends)
-    const body = buildBody({
-      shop: ctx.shop,
-      variantId: ctx.variantId,
-      style: ctx.style || "friendly",
+    // Build Twilio create() payload
+    const payload = {
+      from: TWILIO_PHONE_NUMBER, // must be a WhatsApp-enabled number, prefixed with "whatsapp:"
+      to: toWhatsApp,
+    };
+
+    // Prefer Content Template if provided
+    if (opts.contentSid) {
+      payload.contentSid = opts.contentSid;
+
+      if (opts.contentVariables) {
+        payload.contentVariables =
+          typeof opts.contentVariables === "string"
+            ? opts.contentVariables
+            : JSON.stringify(opts.contentVariables);
+      } else {
+        // Ensure it's at least an empty object string
+        payload.contentVariables = "{}";
+      }
+    } else {
+      // Fallback to simple text body (Twilio error 21619 happens when neither body nor media is set)
+      const body = (message || "").trim();
+      if (!body && !opts.mediaUrl) {
+        // Provide a safe default to avoid 21619
+        payload.body = "Heads up! This item is back in stock.";
+      } else if (body) {
+        payload.body = body;
+      }
+      if (opts.mediaUrl) {
+        payload.mediaUrl = [opts.mediaUrl];
+      }
+    }
+
+    const resp = await client.messages.create(payload);
+
+    // Minimal log line (server logs)
+    console.log("✅ WhatsApp sent", {
+      sid: resp.sid,
+      to: resp.to,
+      status: resp.status,
     });
 
-    // Prefer Content Template if provided (avoids session limits & ensures compliance)
-    if (CONTENT_SID) {
-      // You can pass variables your template expects; here are safe defaults:
-      const variables = {
-        // Example keys — change to match your template variable schema
-        "1": ctx.shop || "",
-        "2": ctx.variantId || "",
-        "3": ctx.previewUrl || "",        // optional product URL
-        "4": body,                         // we also pass composed text in case your template uses it
-      };
-
-      const opts = {
-        to,
-        from,
-        contentSid: CONTENT_SID,
-        contentVariables: JSON.stringify(variables),
-      };
-
-      // DEBUG: log what we're sending (without secrets)
-      console.log("➡️ Twilio send (template):", {
-        to,
-        from,
-        contentSid: CONTENT_SID.slice(0, 4) + "…",
-        hasVariables: !!opts.contentVariables,
-      });
-
-      const msg = await client.messages.create(opts);
-      console.log("✅ WhatsApp sent (template)", { sid: msg.sid, status: msg.status });
-      return true;
-    }
-
-    // Fallback: plain text Body (requires 24h session unless the user messaged you)
-    const safeBody = (body && body.trim()) ? body.trim() : "Your requested item is back in stock!";
-    const opts = { to, from, body: safeBody };
-
-    console.log("➡️ Twilio send (body):", { to, from, bodyLen: safeBody.length });
-
-    const msg = await client.messages.create(opts);
-    console.log("✅ WhatsApp sent (body)", { sid: msg.sid, status: msg.status });
-    return true;
+    return { ok: true, sid: resp.sid };
   } catch (err) {
-    const code = err?.code;
-    const message = err?.message || String(err);
-    console.error("❌ sendWhatsApp error:", { code, error: message });
+    // Helpful error details for Render logs
+    let twilioCode, twilioMsg;
+    if (err && err.code) twilioCode = err.code;
+    if (err && err.message) twilioMsg = err.message;
 
-    // Extra hint for 21619
-    if (code === 21619) {
-      console.error(
-        "Hint 21619: Twilio requires either Body, MediaUrl(s) or ContentSid. " +
-        "Set TWILIO_CONTENT_SID to use a WhatsApp template, or ensure 'body' is non-empty."
-      );
-    }
-    return false;
+    console.error("❌ sendWhatsApp error:", {
+      code: twilioCode,
+      message: twilioMsg,
+      raw: err?.moreInfo || err,
+    });
+
+    return { ok: false, error: twilioMsg || String(err) };
   }
 }
 
-module.exports = sendWhatsApp;
+module.exports = { sendWhatsApp };
