@@ -1,45 +1,75 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Robust, copy/paste-safe deploy helper for macOS (zsh/bash)
+# Usage:
+#   chmod +x deploy.sh
+#   ./deploy.sh                 # pushes to main with default message
+#   ./deploy.sh dev "feat: x"   # pushes to branch "dev" with custom message
 
-# ---- SETTINGS ----
-BRANCH="${1:-main}"          # pass a branch name as first arg if not main
-COMMIT_MSG="${2:-chore: deploy}"  # pass a custom commit message as second arg
+set -e  # fail fast (avoid -u to prevent "unbound variable" issues from copy/paste artifacts)
 
-# ---- SAFETY ----
-if [[ -f ".env" ]]; then
-  echo "✅ .env present locally (will NOT be committed if .gitignore below is in place)."
-else
-  echo "ℹ️ No .env found locally (that’s fine in CI/Render)."
-fi
+# --- Inputs ---
+BRANCH="${1:-main}"
+COMMIT_MSG="${2:-chore: deploy}"
 
-# ---- GIT INIT (if needed) ----
+# --- Ensure we're in a git repo ---
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Initializing git repository…"
   git init
-  git branch -M "$BRANCH"
+fi
+
+# --- Ensure user.name/email are set (quietly set safe defaults if missing) ---
+if ! git config user.name >/dev/null 2>&1; then
+  git config user.name "$(whoami)"
+fi
+if ! git config user.email >/dev/null 2>&1; then
+  git config user.email "$(whoami)@$(scutil --get LocalHostName 2>/dev/null || hostname -s).local"
+fi
+
+# --- Ensure branch exists and is current ---
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+if [ -z "$CURRENT_BRANCH" ] || [ "$CURRENT_BRANCH" = "HEAD" ]; then
+  git checkout -B "$BRANCH"
+elif [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
+  git checkout -B "$BRANCH"
+fi
+
+# --- Ensure remote origin exists (edit the URL if needed) ---
+if ! git remote get-url origin >/dev/null 2>&1; then
+  echo "Adding origin remote…"
   git remote add origin "https://github.com/<YOUR_GH_USERNAME>/<YOUR_REPO_NAME>.git"
 fi
 
-# ---- STATUS ----
-echo "Current remote(s):"
-git remote -v || true
+echo "Remote(s):"
+git remote -v
 
-# ---- ADD + COMMIT ----
-echo "Adding files…"
+# --- Respect .gitignore (make sure it's there) ---
+if [ ! -f .gitignore ]; then
+  cat > .gitignore <<'EOF'
+node_modules/
+package-lock.json
+.env
+.env.*.local
+*.log
+.DS_Store
+dist/
+.tmp/
+.next/
+coverage/
+EOF
+fi
+
+# --- Add & commit if there are changes ---
 git add -A
 
 if git diff --cached --quiet; then
   echo "No changes to commit."
 else
-  echo "Committing…"
-  git commit -m "$COMMIT_MSG"
+  echo "Committing: $COMMIT_MSG"
+  git commit -m "$COMMIT_MSG" || true
 fi
 
-# ---- PUSH ----
-echo "Pushing to origin/$BRANCH…"
+# --- Push ---
+echo "Pushing to origin/$BRANCH …"
 git push -u origin "$BRANCH"
 
-echo ""
-echo "🎉 Push complete."
-echo "If your Render service is connected to this repo and set to auto-deploy on push, it will redeploy now."
-echo "If you use the Render deploy hook + GitHub Actions below, commits on $BRANCH will trigger a deploy."
+echo "🎉 Push complete. If Render auto-deploys on push, it will redeploy now."
