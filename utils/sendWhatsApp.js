@@ -1,49 +1,84 @@
 // utils/sendWhatsApp.js
-const twilio = require('twilio');
+const twilio = require("twilio");
+
+const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const FROM_PHONE = process.env.TWILIO_PHONE_NUMBER || "whatsapp:+14155238886"; // Twilio sandbox default
+
+if (!ACCOUNT_SID?.startsWith?.("AC")) {
+  console.warn("⚠️ TWILIO_ACCOUNT_SID is missing or invalid. WhatsApp sends will fail.");
+}
+if (!AUTH_TOKEN) {
+  console.warn("⚠️ TWILIO_AUTH_TOKEN is missing. WhatsApp sends will fail.");
+}
+if (!FROM_PHONE.startsWith("whatsapp:")) {
+  console.warn("⚠️ TWILIO_PHONE_NUMBER should be prefixed with 'whatsapp:'. Using sandbox default if needed.");
+}
+
+const client = twilio(ACCOUNT_SID, AUTH_TOKEN);
 
 /**
- * Send a WhatsApp (or SMS) message using Twilio.
- * Env required:
- *  - TWILIO_ACCOUNT_SID
- *  - TWILIO_AUTH_TOKEN
- *  - TWILIO_PHONE_NUMBER  (e.g. "whatsapp:+14155238886" OR "+14155238886")
- *
- * @param {string} to E.164 number, with or without "whatsapp:" prefix (e.g. "+16035551234" or "whatsapp:+16035551234")
- * @param {string} body Message text
- * @returns {Promise<{ ok: boolean, sid?: string, code?: string, error?: string }>}
+ * Send a WhatsApp message.
+ * @param {string} to E.164 phone, with or without 'whatsapp:' prefix
+ * @param {object} ctx { shop, productId, variantId, style }
+ * @returns {Promise<boolean>}
  */
-module.exports = async function sendWhatsApp(to, body) {
-  const accountSid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
-  const authToken  = (process.env.TWILIO_AUTH_TOKEN  || '').trim();
-  const fromRaw    = (process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_WHATSAPP_FROM || '').trim();
-
-  if (!accountSid || !authToken || !fromRaw) {
-    const missing = {
-      TWILIO_ACCOUNT_SID: !!accountSid,
-      TWILIO_AUTH_TOKEN: !!authToken,
-      TWILIO_PHONE_NUMBER: !!fromRaw
-    };
-    const error = `Missing Twilio env vars: ${Object.entries(missing).filter(([,v])=>!v).map(([k])=>k).join(', ')}`;
-    console.error('sendWhatsApp env error:', error);
-    return { ok: false, error };
-  }
-
-  const client = twilio(accountSid, authToken);
-
-  const from = fromRaw.startsWith('whatsapp:') ? fromRaw : `whatsapp:${fromRaw}`;
-  const toNum = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
-
+async function sendWhatsApp(to, ctx = {}) {
   try {
+    const shop = ctx.shop || "";
+    const variantId = ctx.variantId || "";
+    const style = (ctx.style || "friendly").toLowerCase();
+
+    // Build a useful link. Using "add to cart" with variantId is reliable:
+    // https://<shop>/cart/<variantId>:1
+    const cartUrl =
+      shop && variantId
+        ? `https://${shop}/cart/${encodeURIComponent(variantId)}:1`
+        : "";
+
+    // Simple style presets (MVP)
+    let body;
+    switch (style) {
+      case "formal":
+        body = `Good news — the item you requested is back in stock. You can purchase it here: ${cartUrl}`;
+        break;
+      case "urgent":
+        body = `🔥 Back in stock now! Limited quantities available. Grab it before it's gone: ${cartUrl}`;
+        break;
+      case "friendly":
+      default:
+        body = `Hey! Your item is back in stock 🙌 Tap to buy: ${cartUrl}`;
+        break;
+    }
+
+    // Absolute fallback to satisfy Twilio requirement even if ctx was incomplete
+    if (!body || body.trim().length === 0) {
+      body = "Your requested item is back in stock!";
+    }
+
+    const toWhatsApp = to.startsWith("whatsapp:") ? to : `whatsapp:${to}`;
+    const fromWhatsApp = FROM_PHONE.startsWith("whatsapp:")
+      ? FROM_PHONE
+      : `whatsapp:${FROM_PHONE}`;
+
     const msg = await client.messages.create({
-      from,
-      to: toNum,
-      body
+      to: toWhatsApp,
+      from: fromWhatsApp,
+      body,
     });
-    return { ok: true, sid: msg.sid };
-  } catch (e) {
-    const code = e.code || e.status || e.name || 'TWILIO_ERROR';
-    const error = e.message || String(e);
-    console.error('sendWhatsApp error:', { code, error });
-    return { ok: false, code, error };
+
+    console.log("✅ WhatsApp sent", {
+      sid: msg.sid,
+      to: toWhatsApp,
+      status: msg.status,
+    });
+    return true;
+  } catch (err) {
+    const code = err?.code;
+    const message = err?.message || err?.toString?.() || "unknown error";
+    console.error("❌ sendWhatsApp error:", { code, error: message });
+    return false;
   }
-};
+}
+
+module.exports = sendWhatsApp;
