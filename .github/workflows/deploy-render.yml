@@ -11,8 +11,8 @@ jobs:
     steps:
       - name: Trigger Render Deploy via API
         env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          RENDER_API_KEY: rnd_3h7huqrwexm9RebyR7btTp1xjLbM
+          RENDER_SERVICE_ID: srv-d2h38mbuibrs73etap00
         run: |
           if [ -z "${RENDER_API_KEY:-}" ]; then echo "Missing secret: RENDER_API_KEY"; exit 1; fi
           if [ -z "${RENDER_SERVICE_ID:-}" ]; then echo "Missing secret: RENDER_SERVICE_ID"; exit 1; fi

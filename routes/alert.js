@@ -68,5 +68,36 @@ router.get('/debug/clear', async (_req, res) => {
   const r = await Alert.deleteMany({});
   res.json({ ok: true, deleted: r.deletedCount });
 });
+// --- TEMP DEBUG ROUTES ---
+// List all alerts
+router.get('/debug/list', async (_req, res) => {
+  const all = await Alert.find({}).sort({ createdAt: -1 }).lean();
+  res.json(all);
+});
+
+// Clear all alerts (DANGER in production)
+router.delete('/debug/clear', async (_req, res) => {
+  const { deletedCount } = await Alert.deleteMany({});
+  res.json({ ok: true, deletedCount });
+});
+
+// Seed a pending alert for a known inventory_item_id
+router.post('/debug/seed', express.json(), async (req, res) => {
+  try {
+    const { shop, inventory_item_id, variantId, phone } = req.body;
+    if (!shop || !inventory_item_id || !phone) {
+      return res.status(400).json({ ok: false, error: 'shop, inventory_item_id, phone required' });
+    }
+    const doc = await Alert.findOneAndUpdate(
+      { shop, inventory_item_id, phone },
+      { shop, inventory_item_id, variantId: variantId || null, phone, sent: false },
+      { upsert: true, new: true }
+    );
+    res.json({ ok: true, doc });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// --- END TEMP DEBUG ---
 
 module.exports = router;
