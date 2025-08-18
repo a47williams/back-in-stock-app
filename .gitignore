@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Env & local
+.env
+.env.*.local
+*.log
+.DS_Store
+
+# Build artifacts
+dist/
+.tmp/
+.next/
+coverage/
