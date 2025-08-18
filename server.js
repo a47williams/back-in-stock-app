@@ -7,9 +7,21 @@ const mongoose = require('mongoose');
 
 const app = express();
 
-/* ---------- Core Middleware ---------- */
+/* ---------- CORS ---------- */
 app.use(cors({ origin: true }));
-app.use(express.json());
+
+/* ---------- Body parsing ---------- */
+/**
+ * Use RAW body for /webhook/* so HMAC can be verified on exact bytes,
+ * and JSON body for everything else.
+ */
+app.use((req, res, next) => {
+  if (req.path.startsWith('/webhook')) {
+    return express.raw({ type: 'application/json' })(req, res, next);
+  }
+  // normal routes
+  return express.json()(req, res, next);
+});
 app.use(express.urlencoded({ extended: true }));
 
 /* ---------- Mongo ---------- */
@@ -23,11 +35,11 @@ mongoose
 /* ---------- Routes ---------- */
 const alertRoutes = require('./routes/alert');
 const webhookRoutes = require('./routes/webhook');
-const testRoutes = require('./routes/test');          // <-- make sure this file exists
+const testRoutes = require('./routes/test');
 
 app.use('/alerts', alertRoutes);
-app.use('/webhook', webhookRoutes);
-app.use('/test', testRoutes);                         // <-- mounts /test/whatsapp/status
+app.use('/webhook', webhookRoutes); // will receive RAW bodies
+app.use('/test', testRoutes);
 
 /* ---------- Health ---------- */
 app.get('/health', (_req, res) => res.json({ ok: true }));
