@@ -1,51 +1,57 @@
+{%- comment -%}
+liquid/back-in-stock-widget.liquid
+{%- endcomment -%}
+
+<div id="bis-widget" style="margin-top:16px">
+  <div style="font-weight:600;margin-bottom:8px;">Get notified when this item is back in stock</div>
+  <div style="display:flex;gap:8px;align-items:center;max-width:420px">
+    <input id="bis-phone" type="tel" placeholder="+1 555 555 5555" style="flex:1;padding:10px;border:1px solid #ddd;border-radius:6px">
+    <button id="bis-submit" type="button" style="padding:10px 14px;border:0;border-radius:6px;background:#111;color:#fff;cursor:pointer">Notify Me</button>
+  </div>
+</div>
+
 <script>
-(function() {
-  // 1) Get current variant ID (keep your existing logic here)
+(function () {
   function getCurrentVariantId() {
-    try {
-      // if a global product is present:
-      if (window?.ShopifyAnalytics?.meta?.selectedVariantId) {
-        return String(window.ShopifyAnalytics.meta.selectedVariantId);
-      }
-      // fallback: try from variant select
-      const sel = document.querySelector('form [name="id"]');
-      if (sel && sel.value) return String(sel.value);
-    } catch(e) {}
+    const sel = document.querySelector('form[action*="/cart/add"] [name="id"]');
+    if (sel && sel.value) return String(sel.value);
+    if (window?.ShopifyAnalytics?.meta?.selectedVariantId) {
+      return String(window.ShopifyAnalytics.meta.selectedVariantId);
+    }
     return null;
   }
 
-  // 2) Elements
   const phoneInput = document.querySelector('#bis-phone');
   const btn = document.querySelector('#bis-submit');
   if (!phoneInput || !btn) return;
 
-  // 3) Constants
-  const HOST = 'https://back-in-stock-app.onrender.com';  // your Render URL
-  const SHOP  = '{{ shop.permanent_domain }}';            // << send the shop!
+  const HOST = 'https://back-in-stock-app.onrender.com';
+  const SHOP = '{{ shop.permanent_domain }}';
+  const PRODUCT_ID = '{{ product.id }}';
 
   btn.addEventListener('click', async function() {
-    const phone = phoneInput.value.trim();
     const variantId = getCurrentVariantId();
-    if (!phone || !variantId) {
-      alert('Missing phone or variant'); return;
-    }
-    btn.disabled = true;
+    const phone = (phoneInput.value || '').trim();
 
+    if (!variantId) { alert('Select a variant first.'); return; }
+    if (!phone) { alert('Enter your phone number.'); return; }
+
+    btn.disabled = true;
     try {
       const res = await fetch(`${HOST}/alerts/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          shop: SHOP,                     // << critical
-          productId: '{{ product.id }}',  // ok to send numeric product id
-          variantId,                      // numeric id is fine
-          phone
+          shop: SHOP,
+          productId: PRODUCT_ID,
+          variantId: variantId,
+          phone: phone
         })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'subscribe_failed');
 
-      alert('Got it! We’ll text you when it’s back.');
+      alert('Got it! We’ll text you when it’s back in stock.');
       phoneInput.value = '';
     } catch (e) {
       console.error('subscribe error:', e);

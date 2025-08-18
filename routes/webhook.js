@@ -1,139 +1,153 @@
 // routes/webhook.js
 const express = require('express');
 const crypto = require('crypto');
-
+const router = express.Router();
 const Alert = require('../models/Alert');
 const sendWhatsApp = require('../utils/sendWhatsApp');
 
-const router = express.Router();
+// Toggle HMAC verification by env (use false in dev if needed)
+const SKIP_HMAC = (process.env.SKIP_HMAC === 'true');
 
-/**
- * Verify Shopify webhook HMAC using the RAW request body (Buffer).
- * IMPORTANT: server.js must mount express.raw({ type: 'application/json' }) for /webhook routes.
- */
+// Util: verify webhook HMAC
 function verifyHmac(req) {
-  try {
-    const hmacHeader = req.get('X-Shopify-Hmac-Sha256') || '';
-    const secret = (process.env.SHOPIFY_API_SECRET || '').trim();
-    const rawBody = req.body; // Buffer (thanks to express.raw in server.js)
-
-    if (!hmacHeader || !secret || !rawBody) return false;
-
-    const computed = crypto.createHmac('sha256', secret).update(rawBody).digest(); // Buffer
-    const received = Buffer.from(hmacHeader, 'base64'); // Buffer
-
-    if (received.length !== computed.length) return false;
-    return crypto.timingSafeEqual(received, computed);
-  } catch {
-    return false;
-  }
+  if (SKIP_HMAC) return true;
+  const secret = process.env.SHOPIFY_API_SECRET;
+  const hmacHeader = req.get('X-Shopify-Hmac-Sha256') || '';
+  const body = req.rawBody; // must be set by upstream middleware
+  if (!secret || !hmacHeader || !body) return false;
+  const digest = crypto
+    .createHmac('sha256', secret)
+    .update(body, 'utf8')
+    .digest('base64');
+  return crypto.timingSafeEqual(Buffer.from(hmacHeader), Buffer.from(digest));
 }
 
-/** Safely parse JSON from Buffer -> object */
-function parseBody(req) {
-  try {
-    if (Buffer.isBuffer(req.body)) {
-      return JSON.parse(req.body.toString('utf8'));
+// Middleware to collect raw body for HMAC
+router.use((req, res, next) => {
+  let data = [];
+  req.on('data', chunk => data.push(chunk));
+  req.on('end', () => {
+    req.rawBody = Buffer.concat(data);
+    try {
+      req.body = JSON.parse(req.rawBody.toString('utf8') || '{}');
+    } catch {
+      req.body = {};
     }
-    if (typeof req.body === 'string') {
-      return JSON.parse(req.body);
-    }
-    return req.body || {};
-  } catch (e) {
-    console.error('❌ JSON parse error:', e.message);
-    return {};
-  }
-}
-
-// Simple ping for debugging
-router.post('/ping', express.json(), (req, res) => {
-  console.log('🔔 /webhook/ping', req.body);
-  res.status(200).json({ ok: true });
+    next();
+  });
 });
 
+/**
+ * POST /webhook/inventory
+ * Subscribed topics: products/update, inventory_levels/update
+ * Strategy:
+ *  - products/update: iterate variants; if available > 0, notify alerts by variantId.
+ *  - inventory_levels/update: (optional) only used if you also saved inventory_item_id.
+ */
 router.post('/inventory', async (req, res) => {
-  const topic = req.get('X-Shopify-Topic');
-  const shop = req.get('X-Shopify-Shop-Domain') || null;
-  const hmacPresent = !!req.get('X-Shopify-Hmac-Sha256');
-  const len = req.get('content-length');
-  console.log('📦 /webhook/inventory received {',
-    '\n  topic:', `'${topic}'`,
-    ',\n  shop:', `'${shop}'`,
-    ',\n  hmacPresent:', hmacPresent,
-    ',\n  length:', `'${len}'`,
-    '\n}');
-
   try {
-    // HMAC verification (can bypass with SKIP_HMAC=true while testing)
-    if (!process.env.SKIP_HMAC) {
-      if (!verifyHmac(req)) {
-        console.error('❌ HMAC invalid or missing');
-        return res.status(401).send('Unauthorized');
+    const valid = verifyHmac(req);
+    const topic = req.get('X-Shopify-Topic');
+    const shop  = req.get('X-Shopify-Shop-Domain');
+
+    console.log('🪝 /webhook/inventory received {',
+      '\n  topic:', JSON.stringify(topic),
+      ',\n  shop:', JSON.stringify(shop),
+      ',\n  hmacPresent:', !!req.get('X-Shopify-Hmac-Sha256'),
+      ',\n  length:', String(req.rawBody?.length || '0'),
+      '\n}');
+
+    if (!valid) {
+      console.warn('❌ HMAC invalid or missing');
+      return res.status(401).send('unauthorized');
+    }
+
+    // Handle products/update — best for our no-Admin-token flow
+    if (topic === 'products/update') {
+      const product = req.body;
+      const variants = Array.isArray(product?.variants) ? product.variants : [];
+
+      // Build list of in-stock variantIds
+      const inStockVariantIds = variants
+        .filter(v => {
+          // prefer inventory_quantity > 0; some themes rely on available flag
+          const qty = typeof v.inventory_quantity === 'number' ? v.inventory_quantity : null;
+          const available = (v?.available === true); // not always present
+          return (qty !== null ? qty > 0 : available);
+        })
+        .map(v => String(v.id).match(/(\d+)$/)?.[1] || String(v.id));
+
+      if (!inStockVariantIds.length) {
+        console.log('ℹ️ products/update: no variants are in-stock; nothing to do.');
+        return res.status(200).send('ok');
       }
-    } else {
-      console.warn('⚠️ HMAC verification skipped (SKIP_HMAC=true)');
-    }
 
-    // Parse body AFTER HMAC verification
-    const body = parseBody(req);
-    // Log keys to understand shape if needed
-    // console.log('🔎 payload keys:', Object.keys(body));
+      // Fetch pending alerts for any of these variants for this shop
+      const pending = await Alert.find({
+        shop,
+        variantId: { $in: inStockVariantIds },
+        sent: { $ne: true },
+      });
 
-    // Shopify inventory_levels/update typically provides these at top level
-    let inventory_item_id = body?.inventory_item_id ?? null;
-    let available = body?.available ?? null;
+      console.log(`🔎 products/update: in-stock variants=${inStockVariantIds.join(', ')}; pending matches=${pending.length}`);
 
-    // Fallbacks (some test payloads differ)
-    if (!inventory_item_id && body?.inventory_item?.id) {
-      inventory_item_id = body.inventory_item.id;
-    }
-    if (available === null && typeof body?.available_adjustment === 'number') {
-      // Not a perfect substitute, but helps with certain test payloads
-      available = body.available_adjustment;
-    }
-
-    if (!inventory_item_id) {
-      console.warn('ℹ️  No inventory_item_id on payload — nothing to do.');
-      return res.status(200).json({ ok: true, skipped: true });
-    }
-
-    inventory_item_id = String(inventory_item_id);
-    const availNum = Number(available);
-
-    console.log(`🧾 Parsed: inventory_item_id=${inventory_item_id}, available=${isNaN(availNum) ? 'unknown' : availNum}`);
-
-    if (!Number.isFinite(availNum) || availNum <= 0) {
-      console.log('ℹ️  Availability not positive/unknown; skip notifications.');
-      return res.status(200).json({ ok: true, skipped: true });
-    }
-
-    // Find matching alerts (optionally scoped by shop)
-    const match = { inventory_item_id, sent: false };
-    if (shop) match.shop = shop;
-
-    const alerts = await Alert.find(match);
-    console.log(`🔎 Found ${alerts.length} pending alert(s) for inventory_item_id=${inventory_item_id}`);
-
-    for (const a of alerts) {
-      try {
-        const msg = `✅ Back in stock! Variant ${a.variantId} is available again.`;
-        const ok = await sendWhatsApp(a.phone, msg);
+      // Send notifications
+      for (const a of pending) {
+        const ok = await sendWhatsApp(a.phone, `Good news! Your item is back in stock: https://${shop}/products/${product?.handle || ''}`);
         if (ok) {
           a.sent = true;
           await a.save();
-          console.log(`📲 Notified ${a.phone}`);
+          console.log('✅ Notified & marked sent', { phone: a.phone, variantId: a.variantId });
         } else {
-          console.warn(`⚠️ WhatsApp send returned false for ${a.phone}`);
+          console.warn('⚠️ Failed to send WhatsApp', { phone: a.phone, variantId: a.variantId });
         }
-      } catch (err) {
-        console.error('💥 Notify error for', a.phone, err.message || err);
       }
+
+      return res.status(200).send('ok');
     }
 
-    return res.status(200).json({ ok: true, notified: alerts.length });
+    // Optional: inventory_levels/update support (works only if your alerts have inventory_item_id saved)
+    if (topic === 'inventory_levels/update') {
+      const level = req.body;
+      const available = Number(level?.available ?? 0);
+      const inventory_item_id = String(level?.inventory_item_id || '');
+
+      console.log('📦 inventory_levels/update parsed:', { inventory_item_id, available });
+
+      if (!inventory_item_id || available <= 0) {
+        console.log('ℹ️ inventory level not positive/unknown; skip notifications.');
+        return res.status(200).send('ok');
+      }
+
+      const pending = await Alert.find({
+        shop,
+        inventory_item_id,
+        sent: { $ne: true },
+      });
+
+      console.log(`🔎 inventory_levels/update: pending for ${inventory_item_id} = ${pending.length}`);
+
+      // We don't have product handle here; send a generic message
+      for (const a of pending) {
+        const ok = await sendWhatsApp(a.phone, `Good news! An item you wanted is back in stock: https://${shop}`);
+        if (ok) {
+          a.sent = true;
+          await a.save();
+          console.log('✅ Notified & marked sent', { phone: a.phone, inventory_item_id });
+        } else {
+          console.warn('⚠️ Failed to send WhatsApp', { phone: a.phone, inventory_item_id });
+        }
+      }
+
+      return res.status(200).send('ok');
+    }
+
+    // Unknown topic
+    console.log('ℹ️ Unhandled topic:', topic);
+    res.status(200).send('ok');
   } catch (err) {
-    console.error('💥 inventory handler error:', err);
-    return res.status(500).json({ error: 'handler_failed' });
+    console.error('❌ webhook error:', err);
+    res.status(200).send('ok'); // respond 200 so Shopify doesn’t retry forever
   }
 });
 

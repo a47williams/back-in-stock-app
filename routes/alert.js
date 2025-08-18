@@ -1,11 +1,9 @@
 // routes/alert.js
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const Alert = require("../models/Alert");
-const Shop = require("../models/Shop");
-const { getVariantInventoryId } = require("../utils/shopifyApi");
+const Alert = require('../models/Alert');
 
-// helper: strip gid if theme sends gid://shopify/ProductVariant/123
+// Extract the numeric id from a GID or raw value
 function normalizeId(id) {
   if (!id) return null;
   const s = String(id);
@@ -13,40 +11,62 @@ function normalizeId(id) {
   return m ? m[1] : s;
 }
 
-router.post("/register", express.json(), async (req, res) => {
+/**
+ * POST /alerts/register
+ * Body: { shop, productId, variantId, phone }
+ * Saves (or upserts) a pending alert for this shop+variant+phone.
+ * NOTE: No Admin API calls here—keeps subscribe lightweight.
+ */
+router.post('/register', express.json(), async (req, res) => {
   try {
-    // 1) Prefer body.shop; fall back to header or .env (single-store dev)
-    let shop =
+    const shop =
       (req.body && req.body.shop) ||
       req.get('X-Shopify-Shop-Domain') ||
-      process.env.SHOPIFY_SHOP || null;
+      process.env.SHOPIFY_SHOP ||
+      null;
 
     const productId = normalizeId(req.body?.productId);
     const variantId = normalizeId(req.body?.variantId);
     const phone     = (req.body?.phone || '').trim();
 
     if (!shop || !variantId || !phone) {
-      return res.status(400).json({ error: "Missing shop, variantId or phone" });
+      console.error('register missing fields:', { shop, variantId, phone });
+      return res.status(400).json({ error: 'Missing shop, variantId or phone' });
     }
 
-    // 2) Look up inventory_item_id for this variant
-    const inventory_item_id = await getVariantInventoryId(shop, variantId);
-    if (!inventory_item_id) {
-      return res.status(400).json({ error: "No inventory_item_id found for this variant" });
-    }
-
-    // 3) Save / upsert alert
     await Alert.findOneAndUpdate(
-      { shop, inventory_item_id, phone },
-      { shop, inventory_item_id, phone, productId, variantId, sent: false },
+      { shop, variantId, phone },
+      { shop, productId, variantId, phone, sent: false },
       { upsert: true, new: true }
     );
 
-    console.log("✅ Alert saved for", { shop, inventory_item_id, phone });
-    return res.status(200).json({ success: true });
+    console.log('✅ Alert saved', { shop, variantId, phone });
+    res.json({ success: true });
   } catch (err) {
-    console.error("❌ Error saving alert", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error('❌ Error saving alert', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * GET /alerts/debug/list
+ * (Optional helper for debugging in Render)
+ */
+router.get('/debug/list', async (_req, res) => {
+  try {
+    const docs = await Alert.find().lean();
+    res.json(docs.map(d => ({
+      shop: d.shop,
+      productId: d.productId,
+      variantId: d.variantId,
+      inventory_item_id: d.inventory_item_id, // may be undefined for older saves
+      phone: d.phone,
+      sent: d.sent,
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+    })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

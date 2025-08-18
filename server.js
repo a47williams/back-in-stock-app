@@ -1,55 +1,46 @@
 // server.js
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const mongoose = require('mongoose');
-
-dotenv.config();
+const session = require('express-session');
 
 const app = express();
 
-// -------- CORS (allow storefront + Shopify) --------
-app.use(cors({ origin: true }));
+// ----- Middleware -----
+app.use(cors({
+  origin: [/\.myshopify\.com$/, /\.ngrok-free\.app$/, /\.onrender\.com$/, 'http://localhost:3000'],
+  credentials: false,
+}));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'dev-secret',
+  resave: false,
+  saveUninitialized: false,
+}));
 
-// -------- Body parser switch: RAW for /webhook, JSON for everything else --------
-app.use((req, res, next) => {
-  if (req.path.startsWith('/webhook')) {
-    // Shopify requires the exact raw bytes for HMAC verification
-    return express.raw({ type: 'application/json' })(req, res, next);
-  }
-  return express.json()(req, res, next);
-});
+// ----- DB -----
+const mongoUri = process.env.MONGO_URI;
+if (!mongoUri) {
+  console.error('Missing MONGO_URI');
+}
+mongoose.connect(mongoUri, {})
+  .then(() => console.log('✅ MongoDB connected'))
+  .catch(err => console.error('❌ Mongo error', err.message));
 
-// -------- Routes --------
-const webhookRoutes = require('./routes/webhook'); // expects raw body
+// ----- Routes -----
+const alertRoutes = require('./routes/alert');
+const webhookRoutes = require('./routes/webhook'); // keep if present
+
+app.use('/alerts', alertRoutes);
 app.use('/webhook', webhookRoutes);
 
-const alertRoutes = require('./routes/alert');     // normal JSON
-const authRoutes  = require('./routes/auth');      // normal JSON
-app.use('/alerts', alertRoutes);
-app.use('/auth', authRoutes);
+// health check
+app.get('/', (_req, res) => res.send('App running!'));
 
-// Health & root
-app.get('/', (_req, res) => res.send('✅ App running!'));
-app.get('/health', (_req, res) => res.json({ ok: true }));
-
-// -------- MongoDB --------
-async function connectMongo() {
-  if (!process.env.MONGO_URI) {
-    console.warn('⚠️  MONGO_URI missing; skipping Mongo connect');
-    return;
-  }
-  try {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log('✅ MongoDB connected');
-  } catch (err) {
-    console.error('❌ MongoDB connection error:', err.message);
-  }
-}
-connectMongo();
-
-// -------- Start server --------
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server started at http://localhost:${PORT}`);
 });
