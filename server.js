@@ -1,50 +1,34 @@
 // server.js
-require('dotenv').config();
-
-const express = require('express');
-const cors = require('cors');
-const mongoose = require('mongoose');
+const express = require("express");
+const session = require("express-session");
+const cors = require("cors");
+require("dotenv").config();
 
 const app = express();
+app.use(cors());
+app.use(express.json());
 
-/* ---------- CORS ---------- */
-app.use(cors({ origin: true }));
+// Basic health check
+app.get("/health", (req, res) => res.json({ ok: true, env: process.env.NODE_ENV || "development" }));
 
-/* ---------- Body parsing ---------- */
-/**
- * Use RAW body for /webhook/* so HMAC can be verified on exact bytes,
- * and JSON body for everything else.
- */
-app.use((req, res, next) => {
-  if (req.path.startsWith('/webhook')) {
-    return express.raw({ type: 'application/json' })(req, res, next);
-  }
-  // normal routes
-  return express.json()(req, res, next);
-});
-app.use(express.urlencoded({ extended: true }));
+// Sessions (fine for dev; for prod use a store)
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "dev-secret",
+    resave: false,
+    saveUninitialized: false,
+  })
+);
 
-/* ---------- Mongo ---------- */
-const mongoUri = process.env.MONGO_URI;
-if (!mongoUri) console.warn('⚠️  Missing MONGO_URI');
-mongoose
-  .connect(mongoUri || '', {})
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch(err => console.error('❌ Mongo error:', err.message));
+// --- Mount your routers ---
+app.use("/auth", require("./routes/auth"));
+app.use("/alerts", require("./routes/alert"));
+app.use("/webhook", require("./routes/webhook"));
 
-/* ---------- Routes ---------- */
-const alertRoutes = require('./routes/alert');
-const webhookRoutes = require('./routes/webhook');
-const testRoutes = require('./routes/test');
+// NEW: mount test routes so GET /test/whatsapp/send works
+app.use("/test", require("./routes/test"));
 
-app.use('/alerts', alertRoutes);
-app.use('/webhook', webhookRoutes); // will receive RAW bodies
-app.use('/test', testRoutes);
-
-/* ---------- Health ---------- */
-app.get('/health', (_req, res) => res.json({ ok: true }));
-app.get('/', (_req, res) => res.send('✅ App running'));
-
-/* ---------- Start ---------- */
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server started at http://localhost:${PORT}`);
+});
