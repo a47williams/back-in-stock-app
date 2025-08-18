@@ -1,23 +1,51 @@
-const express = require('express');
+// routes/alert.js
+const express = require("express");
 const router = express.Router();
-const Alert = require('../models/Alert');
+const Alert = require("../models/Alert");
+const Shop = require("../models/Shop");
+const { getVariantInventoryId } = require("../utils/shopifyApi");
 
-// Save alert request (e.g. customer clicks "Notify Me")
-router.post('/register', async (req, res) => {
-  const { productId, variantId, phone, email } = req.body;
-
-  if (!productId || !variantId || (!phone && !email)) {
-    return res.status(400).json({ error: 'Missing data' });
-  }
-
+router.post("/register", express.json(), async (req, res) => {
   try {
-    const alert = new Alert({ productId, variantId, phone, email });
-    await alert.save();
-    res.status(200).json({ success: true });
+    const { shop, productId, variantId, phone } = req.body;
+
+    // 1. Look up the inventory_item_id for this variant
+    const inventory_item_id = await getVariantInventoryId(shop, variantId);
+
+    if (!inventory_item_id) {
+      return res.status(400).json({ error: "No inventory_item_id found for this variant" });
+    }
+
+    // 2. Save or update alert
+    await Alert.findOneAndUpdate(
+      { shop, inventory_item_id, phone },
+      {
+        shop,
+        inventory_item_id,
+        phone,
+        productId,
+        variantId,
+      },
+      { upsert: true, new: true }
+    );
+
+    console.log("✅ Alert saved for", { shop, inventory_item_id, phone });
+
+    return res.status(200).json({ success: true });
   } catch (err) {
-    console.error('Failed to save alert:', err);
-    res.status(500).json({ error: 'Failed to register alert' });
+    console.error("❌ Error saving alert", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
 module.exports = router;
+router.get('/debug/list', async (_req, res) => {
+  const docs = await Alert.find().lean();
+  res.json(docs.map(d => ({
+    shop: d.shop,
+    variantId: d.variantId,
+    inventory_item_id: d.inventory_item_id,
+    phone: d.phone,
+    sent: d.sent,
+  })));
+});
