@@ -1,64 +1,123 @@
 {%- comment -%}
-liquid/back-in-stock-widget.liquid
+Back-in-Stock Widget
+- Renders only when the currently selected variant is unavailable OR the product is completely sold out
+- Also re-checks on variant change and hides when the selection is in stock
 {%- endcomment -%}
 
-<div id="bis-widget" style="margin-top:16px">
-  <div style="font-weight:600;margin-bottom:8px;">Get notified when this item is back in stock</div>
-  <div style="display:flex;gap:8px;align-items:center;max-width:420px">
-    <input id="bis-phone" type="tel" placeholder="+1 555 555 5555" style="flex:1;padding:10px;border:1px solid #ddd;border-radius:6px">
-    <button id="bis-submit" type="button" style="padding:10px 14px;border:0;border-radius:6px;background:#111;color:#fff;cursor:pointer">Notify Me</button>
+{%- assign bis_host = 'https://back-in-stock-app.onrender.com' -%}
+{%- assign shop_domain = shop.permanent_domain -%}
+
+{%- if template contains 'product' -%}
+  {%- assign sel_variant = product.selected_or_first_available_variant -%}
+  {%- assign show_widget = false -%}
+
+  {%- if product.available == false -%}
+    {%- assign show_widget = true -%}
+  {%- elsif sel_variant and sel_variant.available == false -%}
+    {%- assign show_widget = true -%}
+  {%- endif -%}
+
+  <div id="bis-widget"
+       data-host="{{ bis_host }}"
+       data-shop="{{ shop_domain }}"
+       style="display: {{ show_widget | default: false | ternary: 'block','none' }};">
+    <style>
+      #bis-widget { margin-top: 1rem; }
+      #bis-widget .bis-row { display:flex; gap:.5rem; align-items:center; }
+      #bis-widget input[type="tel"] { flex: 1; padding:.6rem .7rem; }
+      #bis-widget button { padding:.6rem .9rem; cursor:pointer; }
+      #bis-widget .bis-note { font-size:.875rem; color:#666; margin-bottom:.35rem; }
+    </style>
+
+    <div class="bis-note">Get notified when this item is back in stock</div>
+    <div class="bis-row">
+      <input id="bis-phone" type="tel" placeholder="+1XXXXXXXXXX" />
+      <button id="bis-submit" type="button">Notify Me</button>
+    </div>
   </div>
-</div>
 
-<script>
-(function () {
-  function getCurrentVariantId() {
-    const sel = document.querySelector('form[action*="/cart/add"] [name="id"]');
-    if (sel && sel.value) return String(sel.value);
-    if (window?.ShopifyAnalytics?.meta?.selectedVariantId) {
-      return String(window.ShopifyAnalytics.meta.selectedVariantId);
+  <script>
+  (function () {
+    const root = document.getElementById('bis-widget');
+    if (!root) return;
+
+    const HOST = root.getAttribute('data-host');
+    const SHOP = root.getAttribute('data-shop');
+    const btn  = root.querySelector('#bis-submit');
+    const tel  = root.querySelector('#bis-phone');
+
+    function getCurrentVariantId() {
+      const vInput = document.querySelector('form[action*="/cart/add"] input[name="id"]');
+      if (vInput && vInput.value) return String(vInput.value);
+      const urlV = new URLSearchParams(window.location.search).get('variant');
+      return urlV ? String(urlV) : null;
     }
-    return null;
-  }
 
-  const phoneInput = document.querySelector('#bis-phone');
-  const btn = document.querySelector('#bis-submit');
-  if (!phoneInput || !btn) return;
-
-  const HOST = 'https://back-in-stock-app.onrender.com';
-  const SHOP = '{{ shop.permanent_domain }}';
-  const PRODUCT_ID = '{{ product.id }}';
-
-  btn.addEventListener('click', async function() {
-    const variantId = getCurrentVariantId();
-    const phone = (phoneInput.value || '').trim();
-
-    if (!variantId) { alert('Select a variant first.'); return; }
-    if (!phone) { alert('Enter your phone number.'); return; }
-
-    btn.disabled = true;
-    try {
-      const res = await fetch(`${HOST}/alerts/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          shop: SHOP,
-          productId: PRODUCT_ID,
-          variantId: variantId,
-          phone: phone
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'subscribe_failed');
-
-      alert('Got it! We’ll text you when it’s back in stock.');
-      phoneInput.value = '';
-    } catch (e) {
-      console.error('subscribe error:', e);
-      alert('Error subscribing. Please try again.');
-    } finally {
-      btn.disabled = false;
+    function getProductId() {
+      try {
+        const a = window.ShopifyAnalytics || {};
+        const meta = a.meta || {};
+        if (meta.product && meta.product.id) return String(meta.product.id);
+      } catch (e) {}
+      return null;
     }
-  });
-})();
-</script>
+
+    async function register() {
+      const phone = (tel.value || '').trim();
+      if (!phone || !phone.startsWith('+')) {
+        alert('Please enter phone in international format, e.g. +16035551234');
+        tel.focus(); return;
+      }
+      const variantId = getCurrentVariantId();
+      if (!variantId) { alert('Select a variant and try again.'); return; }
+
+      btn.disabled = true;
+      try {
+        const res = await fetch(HOST + '/alerts/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shop: SHOP,
+            productId: getProductId(),
+            variantId,
+            phone
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          console.error('Register failed', res.status, data);
+          alert(data?.error || 'Error subscribing. Please try again.');
+          return;
+        }
+        alert('✅ Subscribed! We’ll text you when it’s back.');
+        tel.value = '';
+      } catch (err) {
+        console.error('Register exception', err);
+        alert('Network error. Please try again.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener('click', register);
+    tel.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); register(); } });
+
+    // Hide widget when the currently selected variant is in stock.
+    function toggleByAvailability() {
+      // Many themes expose variant JSON on the product form; quickest check is the hidden input plus ATC button state.
+      // Fallback heuristic: if the "Sold out" button is visible/disabled, show the widget; else hide.
+      const atcBtn = document.querySelector('form[action*="/cart/add"] [type="submit"]');
+      const soldOut = atcBtn && (atcBtn.disabled || /sold\s*out/i.test(atcBtn.textContent || ''));
+      root.style.display = soldOut ? 'block' : 'none';
+    }
+    toggleByAvailability();
+
+    // Listen for variant changes (covers most OS 2.0 themes)
+    document.addEventListener('change', function (e) {
+      if (e.target && e.target.closest('form[action*="/cart/add"]')) {
+        setTimeout(toggleByAvailability, 0);
+      }
+    });
+  })();
+  </script>
+{%- endif -%}

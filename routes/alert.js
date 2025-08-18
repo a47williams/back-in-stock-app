@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const Alert = require('../models/Alert');
 
-// Extract the numeric id from a GID or raw value
+// normalize numeric id from gid or number
 function normalizeId(id) {
   if (!id) return null;
   const s = String(id);
@@ -11,19 +11,16 @@ function normalizeId(id) {
   return m ? m[1] : s;
 }
 
-/**
- * POST /alerts/register
- * Body: { shop, productId, variantId, phone }
- * Saves (or upserts) a pending alert for this shop+variant+phone.
- * NOTE: No Admin API calls here—keeps subscribe lightweight.
- */
+// Simple health for this router (reachable at /alerts/healthz)
+router.get('/healthz', (_req, res) => res.json({ ok: true, scope: 'alerts' }));
+
+// POST /alerts/register
 router.post('/register', express.json(), async (req, res) => {
   try {
-    const shop =
+    let shop =
       (req.body && req.body.shop) ||
       req.get('X-Shopify-Shop-Domain') ||
-      process.env.SHOPIFY_SHOP ||
-      null;
+      process.env.SHOPIFY_SHOP || null;
 
     const productId = normalizeId(req.body?.productId);
     const variantId = normalizeId(req.body?.variantId);
@@ -48,10 +45,7 @@ router.post('/register', express.json(), async (req, res) => {
   }
 });
 
-/**
- * GET /alerts/debug/list
- * (Optional helper for debugging in Render)
- */
+// GET /alerts/debug/list
 router.get('/debug/list', async (_req, res) => {
   try {
     const docs = await Alert.find().lean();
@@ -59,7 +53,7 @@ router.get('/debug/list', async (_req, res) => {
       shop: d.shop,
       productId: d.productId,
       variantId: d.variantId,
-      inventory_item_id: d.inventory_item_id, // may be undefined for older saves
+      inventory_item_id: d.inventory_item_id,
       phone: d.phone,
       sent: d.sent,
       createdAt: d.createdAt,
