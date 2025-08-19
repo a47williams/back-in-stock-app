@@ -1,42 +1,42 @@
-// server.js
 const express = require("express");
 const mongoose = require("mongoose");
-const morgan = require("morgan");
-const cors = require("cors");
 const path = require("path");
+const dotenv = require("dotenv");
 
-require("dotenv").config();
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Connect to DB (loads db.js, which runs mongoose.connect)
-require("./db");
+// --- DB Setup ---
+const db = mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+global.dbReady = db.then(() => console.log("✅ Connected to MongoDB")).catch(err => {
+  console.error("❌ MongoDB connection error:", err);
+});
 
-// Middleware
-app.use(cors());
-app.use(morgan("dev"));
+// --- Middleware ---
 app.use(express.json());
 
-// Serve static files from "public" directory
+// --- Serve Static Files (HTML, CSS, etc.) ---
 app.use(express.static(path.join(__dirname, "public")));
 
-// Routes
-app.use("/alerts", require("./routes/alert"));
+// --- Routes ---
 app.use("/auth", require("./routes/auth"));
-app.use("/uninstall", require("./routes/uninstall"));
+app.use("/alerts", require("./routes/alert"));
 app.use("/webhook", require("./routes/webhook"));
+app.use("/test", require("./routes/test"));
+app.use("/theme", require("./routes/theme"));
+app.use("/uninstall", require("./routes/uninstall"));
 
-// Fallback route
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: "Not found", path: req.path });
-});
-
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server listening on port ${PORT}`);
-});
-// If the root route is hit, redirect to the settings page
+// --- Root Route Redirect to Settings Page ---
 app.get("/", (req, res) => {
   res.redirect("/settings.html");
+});
+
+// --- Start Server ---
+app.listen(PORT, () => {
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
