@@ -3,9 +3,8 @@ const mongoose = require("mongoose");
 
 const ShopSchema = new mongoose.Schema(
   {
-    shop: { type: String, unique: true, index: true },
-    accessToken: { type: String, required: true },
-    installedAt: { type: Date },
+    shop: { type: String, required: true, unique: true },
+    accessToken: { type: String },
   },
   { timestamps: true }
 );

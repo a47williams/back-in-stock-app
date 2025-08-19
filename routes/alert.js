@@ -2,58 +2,65 @@
 const express = require("express");
 const router = express.Router();
 const Alert = require("../models/Alert");
-const { isDBReady } = require("../utils/db");
-const { getVariantInventoryId } = require("../utils/shopifyApi");
+const { getVariantInventoryId, getShopToken } = require("../utils/shopifyApi");
 
 // POST /alerts/register
 router.post("/register", express.json(), async (req, res) => {
   try {
-    if (!isDBReady()) return res.status(503).json({ error: "Database unavailable, try again in a few seconds." });
-
     const { shop, productId, variantId, phone } = req.body || {};
+
     if (!shop || !productId || !variantId || !phone) {
-      return res.status(400).json({ error: "Missing shop, productId, variantId or phone" });
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Try Shopify twice in case of transient 429s/cold token
-    let inventory_item_id = null;
-    for (let i = 0; i < 2; i++) {
-      try {
-        inventory_item_id = await getVariantInventoryId(shop, variantId);
-        if (inventory_item_id) break;
-      } catch (e) {
-        if (i === 1) throw e;
-        await new Promise((r) => setTimeout(r, 500));
-      }
+    const token = await getShopToken(shop);
+    if (!token) {
+      return res
+        .status(401)
+        .json({ error: `No access token on file for shop ${shop}` });
     }
+
+    const inventory_item_id = await getVariantInventoryId(shop, variantId);
     if (!inventory_item_id) {
-      return res.status(404).json({ error: "No inventory_item_id for this variant" });
+      return res
+        .status(400)
+        .json({ error: "No inventory_item_id for this variant" });
     }
 
     const doc = await Alert.findOneAndUpdate(
       { shop, inventory_item_id, phone },
       {
-        $setOnInsert: {
+        $set: {
           shop,
+          productId: String(productId),
+          variantId: String(variantId),
           inventory_item_id,
           phone,
-          productId,
-          variantId,
           sent: false,
-          createdAt: new Date(),
         },
-        $set: { updatedAt: new Date() },
       },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
+      { upsert: true, new: true }
     );
 
-    console.log("Alert saved", { shop, inventory_item_id, phone, id: doc?._id?.toString?.() });
+    console.log("✅ Alert saved", {
+      shop,
+      productId,
+      variantId,
+      phone,
+      id: doc?._id?.toString(),
+    });
+
     res.json({ success: true });
   } catch (err) {
-    console.error("Error saving alert", err);
-    const msg = err?.message || "Internal server error";
-    res.status(500).json({ error: msg });
+    console.error("❌ Error saving alert", err);
+    res.status(500).json({ error: "Internal server error" });
   }
+});
+
+// Optional debug list (disable or protect in prod)
+router.get("/debug/list", async (_req, res) => {
+  const docs = await Alert.find().sort({ createdAt: -1 }).lean();
+  res.json(docs);
 });
 
 module.exports = router;

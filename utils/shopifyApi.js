@@ -1,165 +1,60 @@
 // utils/shopifyApi.js
-// Utilities for talking to Shopify and processing webhook payloads
-
-const fetch = global.fetch; // Node 18+ / 20+ has global fetch
-const Alert = require("../models/Alert");
 const Shop = require("../models/Shop");
-const sendWhatsApp = require("./sendWhatsApp");
+const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args));
 
-// Helper: get a shop's Admin API access token from DB
-async function getShopToken(shopDomain) {
-  if (!shopDomain) throw new Error("No shop domain provided");
-  const rec = await Shop.findOne({ shop: shopDomain }).lean();
-  if (!rec || !rec.accessToken) {
-    throw new Error(`No access token on file for shop ${shopDomain}`);
-  }
-  return rec.accessToken;
+const API_KEY = process.env.SHOPIFY_API_KEY;
+const API_SECRET = process.env.SHOPIFY_API_SECRET;
+const API_VERSION = process.env.SHOPIFY_API_VERSION || "2023-10";
+const HOST = process.env.HOST;
+
+/** Retrieve stored token for a shop */
+async function getShopToken(shop) {
+  const s = await Shop.findOne({ shop }).lean();
+  return s?.accessToken || null;
 }
 
-// ---- Variant → inventory_item_id ------------------------------------------
-
-/**
- * Return the inventory_item_id for a given numeric variantId
- * Uses Shopify REST Admin API to keep things simple.
- */
+/** Get inventory_item_id for a variant */
 async function getVariantInventoryId(shop, variantId) {
   const token = await getShopToken(shop);
-  const apiVersion = process.env.SHOPIFY_API_VERSION || "2024-07";
-  const url = `https://${shop}/admin/api/${apiVersion}/variants/${variantId}.json`;
+  if (!token) return null;
 
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: {
-      "X-Shopify-Access-Token": token,
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-    },
-  });
-
-  if (!resp.ok) {
-    const txt = await resp.text().catch(() => "");
-    throw new Error(`getVariantInventoryId failed ${resp.status}: ${txt}`);
-  }
-
+  const url = `https://${shop}/admin/api/${API_VERSION}/variants/${variantId}.json`;
+  const resp = await fetch(url, { headers: { "X-Shopify-Access-Token": token }});
+  if (!resp.ok) return null;
   const data = await resp.json();
-  const inventory_item_id = data?.variant?.inventory_item_id;
-  return inventory_item_id ? String(inventory_item_id) : null;
+  return data?.variant?.inventory_item_id || null;
 }
 
-// ---- Webhook payload → notifications ---------------------------------------
-
-/**
- * Given a webhook {topic, shop, payload}, extract inventory_item_id and
- * available quantity, then notify pending alerts.
- * Returns { totalNotified }
- */
-async function notifyFromWebhookPayload({ topic, shop, payload }) {
-  let inventory_item_id = null;
-  let available = null;
-
-  // inventory_levels/update payload
-  if (topic === "inventory_levels/update") {
-    inventory_item_id = payload?.inventory_item_id
-      ? String(payload.inventory_item_id)
-      : null;
-    // Shopify sends either "available" or "available" nested; prefer number
-    if (typeof payload?.available === "number") available = payload.available;
-  }
-
-  // products/update payload (can contain variants with inventory fields)
-  if (!inventory_item_id && topic === "products/update") {
-    const variants = Array.isArray(payload?.variants) ? payload.variants : [];
-    // pick the first variant that has an inventory_item_id
-    for (const v of variants) {
-      if (v?.inventory_item_id) {
-        inventory_item_id = String(v.inventory_item_id);
-        // inventory_quantity may be present here
-        if (typeof v.inventory_quantity === "number") {
-          available = v.inventory_quantity;
-        }
-        break;
-      }
-    }
-  }
-
-  if (!inventory_item_id) {
-    console.log("ℹ️  No inventory_item_id on payload — nothing to do.");
-    return { totalNotified: 0 };
-  }
-
-  if (!(typeof available === "number" && available > 0)) {
-    console.log(
-      `ℹ️  Parsed: inventory_item_id=${inventory_item_id}, available=${available} (<=0) — skip notify.`
-    );
-    return { totalNotified: 0 };
-  }
-
-  // Fetch pending alerts for this item
-  const pending = await Alert.find({
-    shop,
-    inventory_item_id,
-    sent: { $ne: true },
-  })
-    .sort({ createdAt: 1 })
-    .limit(100)
-    .lean();
-
-  if (!pending.length) {
-    console.log(`ℹ️  No pending alert(s) for inventory_item_id=${inventory_item_id}`);
-    return { totalNotified: 0 };
-  }
-
-  // De-dupe by phone in case of dup records
-  const byPhone = new Map();
-  for (const a of pending) {
-    if (!a.phone) continue;
-    if (!byPhone.has(a.phone)) byPhone.set(a.phone, a);
-  }
-
-  let totalNotified = 0;
-  const storeHost = process.env.HOST || ""; // e.g., your Render host (for fallback links)
-
-  // Send and mark as sent
-  for (const [phone, alert] of byPhone.entries()) {
-    try {
-      const to = phone.startsWith("whatsapp:") ? phone : `whatsapp:${phone}`;
-      // build a simple PDP link if we have productId
-      // If you want storefront link, you can store it on Alert at subscribe time.
-      let link = "";
-      if (alert.productId && process.env.STOREFRONT_DOMAIN) {
-        // If you set STOREFRONT_DOMAIN in env, link to store
-        // e.g. myshop.myshopify.com/products/<handle>?variant=<id> (requires handle; we don't have it here)
-        // As a fallback, you might deep-link to admin preview or keep generic.
-        link = `https://${process.env.STOREFRONT_DOMAIN}/products/${alert.productId}`;
-      } else if (storeHost) {
-        link = `https://${storeHost}`;
-      }
-
-      const message =
-        link && link !== storeHost
-          ? `Good news! The item you wanted is back in stock. Tap to view: ${link}`
-          : `Good news! The item you wanted is back in stock.`;
-
-      const resp = await sendWhatsApp(to, message);
-      totalNotified++;
-
-      // Mark this specific alert as sent
-      await Alert.updateOne(
-        { _id: alert._id },
-        { $set: { sent: true, sentAt: new Date(), twilioSid: resp?.sid || null } }
-      ).exec();
-    } catch (err) {
-      const code = err?.code || "";
-      const msg = err?.message || String(err);
-      console.error("sendWhatsApp error:", { phone, code, msg });
-      // do not throw; keep processing others
-    }
-  }
-
-  return { totalNotified };
+/** Begin OAuth: return install URL */
+function beginOAuth(shop) {
+  const scopes = (process.env.SCOPES || "").split(",").map(s => s.trim()).filter(Boolean).join(",");
+  const redirectUri = `${HOST}/auth/callback`;
+  const url = `https://${shop}/admin/oauth/authorize?client_id=${API_KEY}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=nonce&grant_options[]=`; // offline
+  return url;
 }
 
-module.exports = {
-  getVariantInventoryId,
-  notifyFromWebhookPayload,
-};
+/** Complete OAuth (very simplified for dev use) */
+async function completeOAuth(req) {
+  const { shop, code } = req.query;
+  const redirectUri = `${HOST}/auth/callback`;
+
+  const tokenUrl = `https://${shop}/admin/oauth/access_token`;
+  const resp = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: API_KEY,
+      client_secret: API_SECRET,
+      code,
+      redirect_uri: redirectUri,
+    }),
+  });
+  if (!resp.ok) throw new Error("Token exchange failed");
+  const data = await resp.json();
+  const accessToken = data?.access_token;
+  if (!accessToken) throw new Error("No access token");
+
+  return { shop, accessToken };
+}
+
+module.exports = { getVariantInventoryId, getShopToken, beginOAuth, completeOAuth };
