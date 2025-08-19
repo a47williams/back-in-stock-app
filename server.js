@@ -1,43 +1,38 @@
 // server.js
 const express = require("express");
 const mongoose = require("mongoose");
+const morgan = require("morgan");
+const cors = require("cors");
 const path = require("path");
-const dotenv = require("dotenv");
-const db = require("./db");
 
-// Load env vars
-dotenv.config();
+require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Mongo connection
-db.connect();
+// Connect to DB (loads db.js, which runs mongoose.connect)
+require("./db");
 
 // Middleware
+app.use(cors());
+app.use(morgan("dev"));
 app.use(express.json());
 
-// Serve static files (make sure this points to the correct folder)
+// Serve static files from "public" directory
 app.use(express.static(path.join(__dirname, "public")));
 
 // Routes
-app.use("/auth", require("./routes/auth"));
 app.use("/alerts", require("./routes/alert"));
-app.use("/webhook", require("./routes/webhook"));
-app.use("/theme", require("./routes/theme"));
+app.use("/auth", require("./routes/auth"));
 app.use("/uninstall", require("./routes/uninstall"));
+app.use("/webhook", require("./routes/webhook"));
 
-// Default route
-app.get("/", (req, res) => {
-  res.send("✅ Back-in-stock app is running.");
-});
-
-// Catch-all 404 for unmatched routes
+// Fallback route
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Not found", path: req.path });
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
