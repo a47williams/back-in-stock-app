@@ -3,93 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Back in Stock Alerts — Settings</title>
+  <title>Back in Stock Alerts</title>
   <style>
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: system-ui, sans-serif;
+      padding: 2rem;
       background: #f9fafb;
-      margin: 0;
-      padding: 40px 20px;
-      display: flex;
-      justify-content: center;
+      color: #111827;
     }
-
-    .card {
+    .container {
       max-width: 480px;
-      background: white;
-      padding: 24px 28px;
-      border-radius: 16px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      margin: 0 auto;
+      background: #fff;
+      padding: 2rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.06);
       text-align: center;
     }
-
-    h1 {
-      font-size: 22px;
-      font-weight: 700;
-      margin-bottom: 16px;
-    }
-
-    p {
-      font-size: 15px;
-      color: #444;
-      margin-bottom: 24px;
-    }
-
     button {
-      background-color: #111827;
+      background: #111827;
       color: white;
-      padding: 12px 16px;
-      font-size: 15px;
-      font-weight: 600;
       border: none;
-      border-radius: 12px;
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      font-weight: bold;
+      border-radius: 8px;
       cursor: pointer;
-      transition: background-color 0.2s ease;
-      width: 100%;
     }
-
-    button:hover {
-      background-color: #1f2937;
-    }
-
     button:disabled {
       opacity: 0.6;
       cursor: not-allowed;
     }
+    .status {
+      margin-top: 1rem;
+      font-size: 0.95rem;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
+  <div class="container">
     <h1>Back in Stock Alerts</h1>
     <p>Click below to add the WhatsApp widget to your theme. No coding required.</p>
-    <button id="inject-widget">Add Widget to Theme</button>
+    <button id="injectBtn">Injecting…</button>
+    <div class="status" id="statusText"></div>
   </div>
 
   <script>
-    document.getElementById("inject-widget").addEventListener("click", async () => {
-      const btn = document.getElementById("inject-widget");
+    const btn = document.getElementById('injectBtn');
+    const status = document.getElementById('statusText');
+
+    async function injectWidget() {
       btn.disabled = true;
-      btn.textContent = "Injecting...";
+      status.textContent = '';
+      btn.textContent = 'Injecting…';
+
+      const SHOP_DOMAIN = Shopify.shop; // works in Shopify embedded app
 
       try {
-        const shop = new URLSearchParams(window.location.search).get("shop");
-        const res = await fetch("/theme/inject?shop=" + encodeURIComponent(shop));
-        const data = await res.json();
+        const res = await fetch('/theme/inject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shop: SHOP_DOMAIN }),
+        });
+
+        const data = await res.json().catch(() => ({}));
 
         if (res.ok && data && data.ok) {
-          btn.textContent = "✅ Widget Added!";
+          btn.textContent = '✅ Injected';
+          status.textContent = 'The widget has been added to your live theme.';
         } else {
-          btn.textContent = "Error";
-          alert("Failed to inject widget:\n" + (data?.error || "Unknown error"));
-          btn.disabled = false;
+          btn.textContent = 'Try Again';
+          status.textContent = 'Error injecting widget: ' + (data.error || 'Unknown error');
         }
       } catch (err) {
-        console.error(err);
-        btn.textContent = "Error";
-        alert("Network error. Try again.");
-        btn.disabled = false;
+        btn.textContent = 'Try Again';
+        status.textContent = 'Network error: ' + err.message;
       }
-    });
+
+      btn.disabled = false;
+    }
+
+    document.addEventListener('DOMContentLoaded', injectWidget);
   </script>
 </body>
 </html>
