@@ -1,4 +1,3 @@
-// routes/auth.js
 const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
@@ -6,19 +5,17 @@ const Shop = require("../models/Shop");
 
 const router = express.Router();
 
-/* ===== env ===== */
 const {
   SHOPIFY_API_KEY,
   SHOPIFY_API_SECRET,
-  HOST, // e.g. https://back-in-stock-app.onrender.com
+  HOST,
   SCOPES = "read_products,read_inventory,write_inventory",
-  HMAC_MODE = "lenient",   // "strict" | "lenient"
-  SKIP_HMAC = "false",     // "true" | "false"
+  HMAC_MODE = "lenient",
+  SKIP_HMAC = "false",
 } = process.env;
 
 const isTrue = (v) => String(v).toLowerCase() === "true";
 
-/* ===== helpers ===== */
 function buildInstallUrl(shop, state) {
   const redirectUri = `${HOST.replace(/\/$/, "")}/auth/callback`;
   const scope = SCOPES.split(/\s*,\s*/).join(",");
@@ -53,12 +50,12 @@ async function exchangeCodeForToken(shop, code) {
     client_secret: SHOPIFY_API_SECRET,
     code,
   });
-  return data; // { access_token, scope, ... }
+  return data;
 }
 
-/* ===== routes ===== */
+// === ROUTES ===
 
-// start: /auth?shop=your-store.myshopify.com
+// 1. Auth Start
 router.get("/", async (req, res) => {
   try {
     const shop = String(req.query.shop || "").trim();
@@ -70,6 +67,8 @@ router.get("/", async (req, res) => {
     req.session.shopifyState = state;
     req.session.shop = shop;
 
+    console.log("🔐 Saved session state:", state);
+
     const installUrl = buildInstallUrl(shop, state);
     return res.redirect(installUrl);
   } catch (err) {
@@ -78,15 +77,17 @@ router.get("/", async (req, res) => {
   }
 });
 
-// callback: /auth/callback?shop=...&code=...&state=...&hmac=...
+// 2. Auth Callback
 router.get("/callback", async (req, res) => {
   const { shop, code, state } = req.query || {};
+  console.log("⬅️ Received callback with state:", state);
+  console.log("🧠 Session state:", req.session.shopifyState);
+
   try {
     if (!shop || !code || !state) {
       return res.status(400).send("Auth callback error: missing params.");
     }
 
-    // state check
     if (!req.session.shopifyState || state !== req.session.shopifyState) {
       console.error("❌ State mismatch", {
         expected: req.session.shopifyState,
@@ -95,7 +96,7 @@ router.get("/callback", async (req, res) => {
       return res.status(400).send("Auth callback error: invalid state.");
     }
 
-    // HMAC check
+    // HMAC Check
     let hmacOk = false;
     try {
       hmacOk = verifyHmacFromQuery(req.query);
@@ -103,25 +104,19 @@ router.get("/callback", async (req, res) => {
       hmacOk = false;
     }
 
-    const skip = isTrue(SKIP_HMAC);
-    const strict = String(HMAC_MODE).toLowerCase() === "strict";
-
     if (!hmacOk) {
-      if (skip) {
+      if (isTrue(SKIP_HMAC)) {
         console.warn("⚠️ HMAC invalid, SKIP_HMAC=true – continuing.");
-      } else if (strict) {
-        console.error("❌ HMAC invalid (strict).");
+      } else if (HMAC_MODE === "strict") {
         return res.status(400).send("Auth callback error: invalid HMAC.");
       } else {
         console.warn("⚠️ HMAC invalid (lenient) – continuing.");
       }
     }
 
-    // token
     const tokenResp = await exchangeCodeForToken(shop, code);
     const accessToken = tokenResp.access_token;
     if (!accessToken) {
-      console.error("❌ No access_token", tokenResp);
       return res.status(400).send("Auth callback error: missing access token.");
     }
 
@@ -130,38 +125,38 @@ router.get("/callback", async (req, res) => {
       { shop, accessToken, scopes: tokenResp.scope || "" },
       { upsert: true, new: true }
     );
-// Register uninstall webhook
-await fetch(`https://${shop}/admin/api/2023-04/webhooks.json`, {
-  method: "POST",
-  headers: {
-    "X-Shopify-Access-Token": accessToken,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    webhook: {
-      topic: "app/uninstalled",
-      address: `${process.env.HOST}/uninstall/uninstall`,
-      format: "json",
-    },
-  }),
-})
-  .then(res => res.json())
-  .then(data => {
-    if (data?.webhook?.id) {
-      console.log(`✅ Uninstall webhook registered for ${shop}`);
-    } else {
-      console.warn("⚠️ Failed to register uninstall webhook", data);
-    }
-  })
-  .catch(err => {
-    console.error("❌ Error registering uninstall webhook:", err);
-  });
+
+    // Register uninstall webhook
+    await fetch(`https://${shop}/admin/api/2023-04/webhooks.json`, {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": accessToken,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        webhook: {
+          topic: "app/uninstalled",
+          address: `${HOST}/uninstall/uninstall`,
+          format: "json",
+        },
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.webhook?.id) {
+          console.log(`✅ Uninstall webhook registered for ${shop}`);
+        } else {
+          console.warn("⚠️ Failed to register uninstall webhook", data);
+        }
+      })
+      .catch((err) => {
+        console.error("❌ Error registering uninstall webhook:", err);
+      });
 
     console.log("✅ Saved access token for", shop);
 
     delete req.session.shopifyState;
 
-    // back to Shopify admin app
     return res.redirect(`https://${shop}/admin/apps/back-in-stock-alerts`);
   } catch (err) {
     console.error("❌ /auth/callback error", err?.response?.data || err);
@@ -169,7 +164,7 @@ await fetch(`https://${shop}/admin/api/2023-04/webhooks.json`, {
   }
 });
 
-// debug: /auth/token/check?shop=...
+// Token check
 router.get("/token/check", async (req, res) => {
   try {
     const { shop } = req.query;
