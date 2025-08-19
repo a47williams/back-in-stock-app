@@ -1,96 +1,115 @@
+// routes/webhook.js (HOTFIX)
 const express = require("express");
 const crypto = require("crypto");
+const router = express.Router();
 
-const Alert = require("../models/Alert");
-const sendWhatsApp = require("../utils/sendWhatsApp");
+// RAW parser so we can compute HMAC over exact bytes
+const rawParser = express.raw({ type: "application/json" });
 
-// ── HMAC helpers ──────────────────────────────────────────────────────────────
-const WEBHOOK_SECRET =
-  process.env.SHOPIFY_WEBHOOK_SECRET || process.env.SHOPIFY_API_SECRET || "";
+// --- Small in‑memory de‑dupe (10 min TTL) ---
+const seen = new Map();
+function remember(id, ttlMs = 10 * 60 * 1000) {
+  const now = Date.now();
+  // cleanup
+  for (const [k, v] of seen) {
+    if (v < now) seen.delete(k);
+  }
+  seen.set(id, now + ttlMs);
+}
+function isSeen(id) {
+  const exp = seen.get(id);
+  return exp && exp > Date.now();
+}
 
-function verifyShopifyHmac(req) {
+const { notifyFromWebhookPayload } = require("../utils/shopifyApi");
+
+function timingSafeEq(a, b) {
   try {
-    const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
-    if (!WEBHOOK_SECRET || !hmacHeader) return false;
-
-    // req.rawBody must be the unparsed bytes of the request
-    const digest = crypto
-      .createHmac("sha256", WEBHOOK_SECRET)
-      .update(req.rawBody || "")
-      .digest("base64");
-
-    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
+    const A = Buffer.from(a || "");
+    const B = Buffer.from(b || "");
+    if (A.length !== B.length) return false;
+    return crypto.timingSafeEqual(A, B);
   } catch {
     return false;
   }
 }
 
-// ── Router (use raw body *only* for this route) ───────────────────────────────
-const router = express.Router();
+function verifyShopifyHmac(req) {
+  const secret = process.env.SHOPIFY_API_SECRET || "";
+  if (!secret) return { ok: false, reason: "missing SHOPIFY_API_SECRET" };
 
-// IMPORTANT: raw() first, then JSON parse manually after verifying
-router.post(
-  "/inventory",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    const ok = verifyShopifyHmac(req);
+  const provided = req.get("X-Shopify-Hmac-Sha256") || "";
+  if (!provided) return { ok: false, reason: "no hmac header" };
 
-    if (!ok) {
-      console.warn("HMAC invalid");
-      return res.status(401).send("HMAC invalid");
-    }
+  const computed = crypto.createHmac("sha256", secret).update(req.body).digest("base64");
+  return { ok: timingSafeEq(computed, provided), provided, computed };
+}
 
-    let body;
-    try {
-      body = JSON.parse(req.rawBody.toString("utf8"));
-    } catch (e) {
-      console.error("webhook: bad JSON", e);
-      return res.status(400).send("bad json");
-    }
+router.post("/inventory", rawParser, async (req, res) => {
+  const topic = req.get("X-Shopify-Topic"); // 'inventory_levels/update' or 'products/update'
+  const shop = req.get("X-Shopify-Shop-Domain") || "";
+  const deliveryId = req.get("X-Shopify-Delivery-Id") || "";
+  const len = req.get("content-length") || "";
 
-    const topic = req.get("X-Shopify-Topic") || "";
-    const shop = req.get("X-Shopify-Shop-Domain") || "";
-
-    // We handle both topics the same way: find alerts by inventory_item_id
-    let inventory_item_id = null;
-    if (topic === "inventory_levels/update") {
-      inventory_item_id = String(body.inventory_item_id || "");
-    } else if (topic === "products/update") {
-      // Check variants to see which ones are now available
-      // (Your existing parse logic can stay; keeping it compact here)
-      // If you already wrote a helper that extracts available variant->inventory_item_id, call it.
-    }
-
-    // If you store pending alerts by inventory_item_id, look them up:
-    if (!inventory_item_id) {
-      console.log("No inventory_item_id on payload — nothing to do.");
-      return res.status(200).send("ok");
-    }
-
-    // Example: find one pending alert and send (or your batch logic)
-    const pending = await Alert.find({ shop, inventory_item_id, sent: { $ne: true } })
-      .sort({ createdAt: 1 })
-      .limit(1);
-
-    if (!pending.length) {
-      console.log(`No pending alerts for ${inventory_item_id}`);
-      return res.status(200).send("ok");
-    }
-
-    const a = pending[0];
-    try {
-      const msg = await sendWhatsApp(
-        `whatsapp:${a.phone}`,
-        `Good news! This item is back in stock: ${process.env.HOST}/products/${a.productId}?variant=${a.variantId}`
-      );
-      await Alert.updateOne({ _id: a._id }, { $set: { sent: true, sid: msg.sid } });
-      console.log(`Notified ${a.phone} sid ${msg.sid}`);
-    } catch (err) {
-      console.error("sendWhatsApp failed", err && err.code, err && err.message);
-    }
-
-    return res.status(200).send("ok");
+  // De-dupe: same delivery should never be processed twice
+  if (deliveryId && isSeen(deliveryId)) {
+    console.log("🔁 Duplicate delivery ignored", { deliveryId, topic, shop });
+    return res.status(200).json({ ok: true, duplicate: true });
   }
-);
+
+  try {
+    const skip = String(process.env.SKIP_HMAC || "").toLowerCase() === "true";
+    const mode = (process.env.HMAC_MODE || "strict").toLowerCase(); // 'strict' | 'lenient'
+
+    if (!skip) {
+      const v = verifyShopifyHmac(req);
+      if (!v.ok) {
+        if (mode === "lenient") {
+          console.warn("⚠️  HMAC invalid (lenient mode) — continuing", {
+            topic,
+            shop,
+            len,
+          });
+        } else {
+          console.error("❌ HMAC invalid (strict) — rejecting", {
+            topic,
+            shop,
+            len,
+          });
+          return res.status(401).json({ ok: false });
+        }
+      } else {
+        console.log("✅ HMAC valid", { topic, shop, len });
+      }
+    } else {
+      console.log("⚠️  HMAC verification skipped (SKIP_HMAC=true)", { topic, shop, len });
+    }
+
+    // Parse JSON from raw bytes
+    let payload = {};
+    try {
+      payload = JSON.parse(req.body.toString("utf8"));
+    } catch (e) {
+      console.error("❌ JSON parse error", e.message);
+      return res.status(400).json({ ok: false, error: "bad json" });
+    }
+
+    // Mark delivery as seen now (even if we error later, Shopify will retry with the same id)
+    if (deliveryId) remember(deliveryId);
+
+    // Notify based on payload
+    const result = await notifyFromWebhookPayload({ topic, shop, payload });
+    console.log("📦 Webhook processed", {
+      topic,
+      shop,
+      totalNotified: result?.totalNotified ?? 0,
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("❌ Webhook processing error", err);
+    return res.status(500).json({ ok: false });
+  }
+});
 
 module.exports = router;
