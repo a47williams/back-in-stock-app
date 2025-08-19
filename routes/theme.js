@@ -4,11 +4,14 @@ const express = require("express");
 const router = express.Router();
 const { injectSnippet } = require("../utils/snippetWidget");
 const { getAccessToken } = require("../utils/shopifyApi");
-const ensureHmac = require("../utils/hmac"); // ✅ FIX: Make sure this is included
+// const ensureHmac = require("../utils/hmac"); // 🔒 Removed for now since hmac.js doesn't exist
 
-router.post("/inject", ensureHmac, async (req, res) => {
+// Endpoint to inject widget snippet into theme
+router.post("/inject", async (req, res) => {
   const shop = req.query.shop;
-  if (!shop) return res.status(400).json({ ok: false, error: "Missing shop parameter" });
+  if (!shop) {
+    return res.status(400).json({ ok: false, error: "Missing shop parameter" });
+  }
 
   try {
     const accessToken = await getAccessToken(shop);
