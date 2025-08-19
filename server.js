@@ -14,7 +14,7 @@ const authRoutes = require("./routes/auth");
 const alertRoutes = require("./routes/alert");
 const webhookRoutes = require("./routes/webhook");
 const testRoutes = require("./routes/test");
-const uninstallRoutes = require("./routes/uninstall"); // 🆕 added
+const uninstallRoutes = require("./routes/uninstall"); // ✅ FIXED path
 
 // ---- App
 const app = express();
@@ -94,7 +94,7 @@ app.use("/auth", authRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/webhook", webhookRoutes);
 app.use("/test", testRoutes);
-app.use("/uninstall", uninstallRoutes); // 🆕 added uninstall route
+app.use("/uninstall", uninstallRoutes); // ✅ mounted correctly
 
 // ---------- 404 fallback
 app.use((req, res) => {
