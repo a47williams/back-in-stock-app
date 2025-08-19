@@ -5,6 +5,7 @@ const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const session = require('express-session');
+const MongoStore = require('connect-mongo');
 
 dotenv.config();
 
@@ -16,12 +17,16 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Session setup
+// Mongoose: suppress strictQuery warning
+mongoose.set('strictQuery', true);
+
+// Use MongoStore for session management
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || 'default_secret',
+    secret: process.env.SESSION_SECRET || 'keyboard_cat',
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: false,
+    store: MongoStore.create({ mongoUrl: process.env.MONGO_URI })
   })
 );
 
@@ -29,12 +34,12 @@ app.use(
 mongoose
   .connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
-    useUnifiedTopology: true,
+    useUnifiedTopology: true
   })
-  .then(() => console.log('MongoDB connected'))
-  .catch((err) => console.error('MongoDB connection error:', err));
+  .then(() => console.log('✅ MongoDB connected'))
+  .catch((err) => console.error('❌ MongoDB connection error:', err));
 
-// Serve static frontend
+// Static files
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Routes
@@ -44,12 +49,15 @@ app.use('/theme', require('./routes/theme'));
 app.use('/webhook', require('./routes/webhook'));
 app.use('/uninstall', require('./routes/uninstall'));
 
-// Root route - serve settings.html to embed in Shopify admin
+// Default route: show helpful message or redirect
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'settings.html'));
+  res.send(`
+    <h1>Back In Stock Alerts App</h1>
+    <p>If you're seeing this, the app is running but accessed directly. Please use the Shopify interface to interact with the app.</p>
+  `);
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
