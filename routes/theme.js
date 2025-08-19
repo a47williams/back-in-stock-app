@@ -1,26 +1,22 @@
-const express = require('express');
-const router = express.Router();
-const shopifyApi = require('../utils/shopifyApi');
-const snippetWidget = require('../snippetWidget');
+// routes/theme.js
 
-router.post('/inject', ensureHmac, async (req, res) => {
-  const shop = req.body.shop;
-  if (!shop) return res.status(400).json({ ok: false, error: 'Missing shop domain' });
+const express = require("express");
+const router = express.Router();
+const { injectSnippet } = require("../utils/snippetWidget");
+const { getAccessToken } = require("../utils/shopifyApi");
+const ensureHmac = require("../utils/hmac"); // ✅ FIX: Make sure this is included
+
+router.post("/inject", ensureHmac, async (req, res) => {
+  const shop = req.query.shop;
+  if (!shop) return res.status(400).json({ ok: false, error: "Missing shop parameter" });
 
   try {
-    const accessToken = await shopifyApi.getAccessToken(shop);
-    const themeId = await shopifyApi.getLiveThemeId(shop, accessToken);
-    const snippet = await snippetWidget.build(shop);
-
-    const result = await shopifyApi.addSnippetToTheme(shop, accessToken, themeId, snippet);
-    if (result) {
-      return res.json({ ok: true });
-    } else {
-      return res.status(500).json({ ok: false, error: 'Failed to inject snippet' });
-    }
+    const accessToken = await getAccessToken(shop);
+    const result = await injectSnippet(shop, accessToken);
+    return res.json({ ok: true, result });
   } catch (err) {
-    console.error('Inject error:', err);
-    return res.status(500).json({ ok: false, error: err.message || 'Unknown error' });
+    console.error("Injection error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
