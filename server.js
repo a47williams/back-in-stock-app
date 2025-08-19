@@ -1,64 +1,76 @@
 // server.js
-require("dotenv").config();
-
 const express = require("express");
-const session = require("express-session");
 const cors = require("cors");
-const path = require("path");
+const session = require("express-session");
+const dotenv = require("dotenv");
+dotenv.config();
+
+const { connectToDB, isDBReady } = require("./utils/db");
+
+const authRoutes = require("./routes/auth");
+const alertRoutes = require("./routes/alert");
+const webhookRoutes = require("./routes/webhook");
+const testRoutes = require("./routes/test");
+
+const PORT = process.env.PORT || 10000;
+const HOST = process.env.HOST || "";
+const MONGO_URI = process.env.MONGO_URI;
 
 const app = express();
 
-// ---------- CORS (storefront -> Render) ----------
-const allowList = [
-  /\.myshopify\.com$/i,
-  /\.shopify\.com$/i,
-];
-if (process.env.HOST) {
-  try {
-    const host = new URL(process.env.HOST).hostname;
-    if (host) allowList.push(new RegExp(host.replace(/\./g, "\\.") + "$", "i"));
-  } catch (_) {}
-}
-app.use((req, res, next) => {
-  const origin = req.headers.origin || "";
-  const ok = !origin || allowList.some((re) => re.test(origin));
-  if (ok) {
-    res.header("Access-Control-Allow-Origin", origin || "*");
-    res.header("Vary", "Origin");
-    res.header("Access-Control-Allow-Headers", "Content-Type, X-Requested-With");
-    res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  }
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
-
-// ---------- Body parsing ----------
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-// ---------- Session (used for OAuth flows) ----------
+// CORS – allow your shop + preview
 app.use(
-  session({
-    secret: process.env.SESSION_SECRET || "dev-secret",
-    resave: false,
-    saveUninitialized: false,
+  cors({
+    origin: [/\.myshopify\.com$/, /onrender\.com$/],
+    credentials: false,
   })
 );
 
-// ---------- Health ----------
-app.get("/health", (_req, res) => res.json({ ok: true }));
+// Basic body parsing (webhook route uses raw body itself)
+app.use(express.json());
 
-// ---------- Routes ----------
-app.use("/alerts", require("./routes/alert"));
-app.use("/webhook", require("./routes/webhook"));
-app.use("/test", require("./routes/test"));
+// Sessions (fine for MVP)
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "bisw_dev",
+    resave: false,
+    saveUninitialized: false,
+    cookie: { sameSite: "lax", secure: false },
+  })
+);
 
-// ---------- Start ----------
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log("Server started at http://localhost:" + PORT);
-  console.log("MongoDB connected (assumed earlier).");
-  console.log("Your service is live 🎉");
+// Health before DB
+app.get("/health", (req, res) => {
+  res.json({ ok: true, db: isDBReady() ? "up" : "down", host: HOST || null });
 });
 
-module.exports = app;
+// Block requests that need DB while not ready (except health & webhook raw parsing)
+app.use((req, res, next) => {
+  const allow = ["/health", "/webhook/inventory", "/test/whatsapp", "/test/whatsapp/status"];
+  if (allow.some((p) => req.path.startsWith(p))) return next();
+  if (!isDBReady()) return res.status(503).json({ error: "DB not ready" });
+  next();
+});
+
+// Routes
+app.use("/auth", authRoutes);
+app.use("/alerts", alertRoutes);
+app.use("/webhook", webhookRoutes);
+app.use("/test", testRoutes);
+
+// Boot
+(async () => {
+  try {
+    await connectToDB(MONGO_URI);
+    app.listen(PORT, () => {
+      console.log("Server started", { port: PORT });
+      console.log("Primary URL", HOST || "(unset)");
+    });
+  } catch (err) {
+    console.error("Fatal: DB connect failed", err.message);
+    // Keep server up for /health but show 503 for others
+    app.listen(PORT, () => {
+      console.log("Server started in degraded mode", { port: PORT });
+    });
+  }
+})();

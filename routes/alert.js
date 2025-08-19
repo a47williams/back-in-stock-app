@@ -2,55 +2,57 @@
 const express = require("express");
 const router = express.Router();
 const Alert = require("../models/Alert");
+const { isDBReady } = require("../utils/db");
 const { getVariantInventoryId } = require("../utils/shopifyApi");
 
 // POST /alerts/register
 router.post("/register", express.json(), async (req, res) => {
-  const { shop, productId, variantId, phone } = req.body || {};
-
-  console.log("➡️  /alerts/register received", { shop, productId, variantId, phone });
-
-  if (!shop || !productId || !variantId || !phone) {
-    console.log("⛔ register missing fields:", { shop, productId, variantId, phone });
-    return res.status(400).json({ error: "Missing required fields." });
-  }
-
-  let inventory_item_id = null;
-
-  // Try to enrich with inventory_item_id, but DO NOT fail if it’s unavailable
   try {
-    inventory_item_id = await getVariantInventoryId(shop, String(variantId));
-  } catch (err) {
-    console.warn("⚠️  getVariantInventoryId failed (continuing without it):", err?.message || err);
-  }
+    if (!isDBReady()) return res.status(503).json({ error: "Database unavailable, try again in a few seconds." });
 
-  try {
+    const { shop, productId, variantId, phone } = req.body || {};
+    if (!shop || !productId || !variantId || !phone) {
+      return res.status(400).json({ error: "Missing shop, productId, variantId or phone" });
+    }
+
+    // Try Shopify twice in case of transient 429s/cold token
+    let inventory_item_id = null;
+    for (let i = 0; i < 2; i++) {
+      try {
+        inventory_item_id = await getVariantInventoryId(shop, variantId);
+        if (inventory_item_id) break;
+      } catch (e) {
+        if (i === 1) throw e;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    if (!inventory_item_id) {
+      return res.status(404).json({ error: "No inventory_item_id for this variant" });
+    }
+
     const doc = await Alert.findOneAndUpdate(
-      { shop, variantId: String(variantId), phone },
+      { shop, inventory_item_id, phone },
       {
-        shop,
-        productId: String(productId),
-        variantId: String(variantId),
-        phone: String(phone),
-        ...(inventory_item_id ? { inventory_item_id: String(inventory_item_id) } : {}),
-        sent: false,
+        $setOnInsert: {
+          shop,
+          inventory_item_id,
+          phone,
+          productId,
+          variantId,
+          sent: false,
+          createdAt: new Date(),
+        },
+        $set: { updatedAt: new Date() },
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
-    console.log("✅ Alert saved", {
-      shop,
-      productId,
-      variantId,
-      phone,
-      inventory_item_id: inventory_item_id || null,
-      id: doc?._id?.toString?.(),
-    });
-
-    return res.json({ success: true, id: doc?._id });
+    console.log("Alert saved", { shop, inventory_item_id, phone, id: doc?._id?.toString?.() });
+    res.json({ success: true });
   } catch (err) {
-    console.error("❌ Error saving alert", err);
-    return res.status(500).json({ error: "Internal server error" });
+    console.error("Error saving alert", err);
+    const msg = err?.message || "Internal server error";
+    res.status(500).json({ error: msg });
   }
 });
 
