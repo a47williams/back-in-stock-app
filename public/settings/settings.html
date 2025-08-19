@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Enable Back-in-Stock Widget</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 500px;
+      margin: 40px auto;
+      padding: 20px;
+      border: 1px solid #eee;
+      border-radius: 12px;
+      background: #fafafa;
+    }
+    h1 {
+      font-size: 20px;
+      margin-bottom: 16px;
+    }
+    button {
+      padding: 12px 18px;
+      font-size: 16px;
+      background: #111827;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #000;
+    }
+    #result {
+      margin-top: 20px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Enable Back-in-Stock Widget</h1>
+  <p>Click the button below to automatically install the widget on your product pages.</p>
+  <button id="injectBtn">Add Widget to Theme</button>
+  <div id="result"></div>
+
+  <script>
+    document.getElementById("injectBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("injectBtn");
+      const msg = document.getElementById("result");
+      btn.disabled = true;
+      msg.textContent = "Injecting widget...";
+
+      try {
+        const res = await fetch("/theme/install-widget", { method: "POST" });
+        const data = await res.json();
+        if (data.ok) {
+          msg.textContent = "✅ Widget successfully added to your theme!";
+        } else {
+          msg.textContent = "❌ Error: " + (data.error || "unknown issue");
+        }
+      } catch (err) {
+        msg.textContent = "❌ Network error. Please try again.";
+      }
+
+      btn.disabled = false;
+    });
+  </script>
+</body>
+</html>
