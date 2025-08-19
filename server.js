@@ -6,7 +6,7 @@ const cors = require("cors");
 const session = require("express-session");
 const morgan = require("morgan");
 
-// Initialize DB connection on import (and export mongoose for health)
+// Initialize DB connection
 const { mongoose } = require("./db");
 
 // ---- Routes
@@ -14,6 +14,7 @@ const authRoutes = require("./routes/auth");
 const alertRoutes = require("./routes/alert");
 const webhookRoutes = require("./routes/webhook");
 const testRoutes = require("./routes/test");
+const uninstallRoutes = require("./routes/uninstall"); // 🆕 added
 
 // ---- App
 const app = express();
@@ -28,7 +29,7 @@ app.use(
   })
 );
 
-// Sessions (used for OAuth handshake & storing shop tokens)
+// Sessions
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev-session-secret";
 app.use(
   session({
@@ -43,10 +44,10 @@ app.use(
   })
 );
 
-// JSON parsing for API endpoints
+// JSON parsing
 app.use(express.json());
 
-// ---------- Index (handy links for quick checks)
+// ---------- Index
 app.get("/", (_req, res) => {
   const host = process.env.HOST || "https://back-in-stock-app.onrender.com";
   res.type("html").send(`<!doctype html>
@@ -63,7 +64,7 @@ app.get("/", (_req, res) => {
   </html>`);
 });
 
-// ---------- Health (shows DB state + which env keys are present)
+// ---------- Health check
 app.get("/health", (_req, res) => {
   const states = ["disconnected", "connected", "connecting", "disconnecting", "invalid"];
   const dbState = states[mongoose.connection.readyState] || "unknown";
@@ -73,8 +74,8 @@ app.get("/health", (_req, res) => {
     db: dbState,
     env: {
       HOST: !!process.env.HOST,
-      MONGO_URI: !!process.env.MONGO_URI,       // preferred key
-      MONGODB_URI: !!process.env.MONGODB_URI,   // legacy alt if you use it
+      MONGO_URI: !!process.env.MONGO_URI,
+      MONGODB_URI: !!process.env.MONGODB_URI,
       SHOPIFY_API_KEY: !!process.env.SHOPIFY_API_KEY,
       SHOPIFY_API_SECRET: !!process.env.SHOPIFY_API_SECRET,
       SESSION_SECRET: !!process.env.SESSION_SECRET,
@@ -93,14 +94,14 @@ app.use("/auth", authRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/webhook", webhookRoutes);
 app.use("/test", testRoutes);
+app.use("/uninstall", uninstallRoutes); // 🆕 added uninstall route
 
-// ---------- 404
+// ---------- 404 fallback
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Not found", path: req.originalUrl });
 });
 
 // ---------- Error handler
-// (ensures we don't leak stack traces to the client)
 app.use((err, _req, res, _next) => {
   console.error("💥 Unhandled error:", err);
   const status = err.status || 500;
@@ -110,7 +111,7 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-// ---------- Start
+// ---------- Start server
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log("=> Server started at http://localhost:" + PORT);
