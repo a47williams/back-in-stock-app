@@ -36,3 +36,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
 });
+// If the root route is hit, redirect to the settings page
+app.get("/", (req, res) => {
+  res.redirect("/settings.html");
+});
