@@ -1,51 +1,47 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const session = require('express-session');
-const MongoStore = require('connect-mongo');
-const dotenv = require('dotenv');
 const path = require('path');
-const authRoutes = require('./routes/auth');
-const alertRoutes = require('./routes/alert');
-const webhookRoutes = require('./routes/webhook');
-const uninstallRoutes = require('./routes/uninstall');
-const themeRoutes = require('./routes/theme');
+const dotenv = require('dotenv');
+const bodyParser = require('body-parser');
+const cors = require('cors');
 
+// Load environment variables
 dotenv.config();
 
+// Initialize express app
 const app = express();
+const PORT = process.env.PORT || 10000;
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-});
-
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI })
+// Connect to MongoDB
+mongoose
+  .connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
   })
-);
+  .then(() => console.log('MongoDB connected'))
+  .catch((err) => console.error('MongoDB connection error:', err));
 
-app.use('/auth', authRoutes);
-app.use('/alerts', alertRoutes);
-app.use('/webhook', webhookRoutes);
-app.use('/uninstall', uninstallRoutes);
-app.use('/theme', themeRoutes);
-
-// Serve static files (HTML, JS, CSS) from /public
+// Serve static files from /public
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Catch-all route for undefined paths
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: 'Not found', path: req.originalUrl });
+// Routes
+app.use('/auth', require('./routes/auth'));
+app.use('/alert', require('./routes/alert'));
+app.use('/theme', require('./routes/theme'));
+app.use('/webhook', require('./routes/webhook'));
+app.use('/uninstall', require('./routes/uninstall'));
+
+// Health check
+app.get('/', (req, res) => {
+  res.json({ ok: false, error: 'Not found', path: req.path });
 });
 
-const PORT = process.env.PORT || 10000;
+// Start server
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
