@@ -1,48 +1,51 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const path = require('path');
+const session = require('express-session');
+const MongoStore = require('connect-mongo');
 const dotenv = require('dotenv');
-const alertRoutes = require('./routes/alert');
+const path = require('path');
 const authRoutes = require('./routes/auth');
+const alertRoutes = require('./routes/alert');
 const webhookRoutes = require('./routes/webhook');
-const themeRoutes = require('./routes/theme');
 const uninstallRoutes = require('./routes/uninstall');
-const testRoutes = require('./routes/test');
+const themeRoutes = require('./routes/theme');
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 10000;
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGO_URL, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log('✅ MongoDB connected'))
-.catch((err) => console.error('❌ MongoDB connection error:', err));
-
-// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Routes
-app.use('/alerts', alertRoutes);
-app.use('/auth', authRoutes);
-app.use('/webhook', webhookRoutes);
-app.use('/theme', themeRoutes);
-app.use('/uninstall', uninstallRoutes);
-app.use('/test', testRoutes);
-
-// Default route
-app.get('/', (req, res) => {
-  res.status(404).json({ ok: false, error: 'Not found', path: req.path });
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
 });
 
-// Start server
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI })
+  })
+);
+
+app.use('/auth', authRoutes);
+app.use('/alerts', alertRoutes);
+app.use('/webhook', webhookRoutes);
+app.use('/uninstall', uninstallRoutes);
+app.use('/theme', themeRoutes);
+
+// Serve static files (HTML, JS, CSS) from /public
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Catch-all route for undefined paths
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: 'Not found', path: req.originalUrl });
+});
+
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server listening on port ${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });
