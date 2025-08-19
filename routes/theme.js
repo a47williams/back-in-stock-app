@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { ensureHmac } = require('../utils/hmac');
 const shopifyApi = require('../utils/shopifyApi');
 const snippetWidget = require('../snippetWidget');
 
