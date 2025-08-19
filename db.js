@@ -1,23 +1,16 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
-const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI;
+mongoose.set('strictQuery', true); // Or false if preferred
 
-if (!MONGODB_URI) {
-  console.error("❌ No MongoDB URI found in environment variables");
-  process.exit(1);
-}
-
-mongoose
-  .connect(MONGODB_URI, {
+const dbReady = mongoose
+  .connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
-    useUnifiedTopology: true,
+    useUnifiedTopology: true
   })
-  .then(() => {
-    console.log("✅ MongoDB connected");
-  })
+  .then(() => console.log('✅ MongoDB connected'))
   .catch((err) => {
-    console.error("❌ MongoDB connection error:", err);
-    process.exit(1);
+    console.error('❌ MongoDB connection error:', err);
+    throw err;
   });
 
-module.exports = { mongoose };
+module.exports = { dbReady };
