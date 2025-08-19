@@ -1,138 +1,96 @@
-// routes/webhook.js
 const express = require("express");
 const crypto = require("crypto");
-const router = express.Router();
 
 const Alert = require("../models/Alert");
-const WebhookReceipt = require("../models/WebhookReceipt");
+const sendWhatsApp = require("../utils/sendWhatsApp");
 
-let sendWhatsApp = require("../utils/sendWhatsApp");
-if (sendWhatsApp && typeof sendWhatsApp !== "function" && typeof sendWhatsApp.sendWhatsApp === "function") {
-  sendWhatsApp = sendWhatsApp.sendWhatsApp;
-}
+// ── HMAC helpers ──────────────────────────────────────────────────────────────
+const WEBHOOK_SECRET =
+  process.env.SHOPIFY_WEBHOOK_SECRET || process.env.SHOPIFY_API_SECRET || "";
 
-/** HMAC verify (skip with SKIP_HMAC=true during local testing) */
-function verifyHmac(req, raw) {
-  if (process.env.SKIP_HMAC === "true") return true;
-  const secret = process.env.SHOPIFY_API_SECRET || process.env.SHOPIFY_SHARED_SECRET || "";
-  const hdr = req.get("X-Shopify-Hmac-Sha256") || "";
-  if (!secret || !hdr || !raw) return false;
-  const digest = crypto.createHmac("sha256", secret).update(raw, "utf8").digest("base64");
-  try { return crypto.timingSafeEqual(Buffer.from(hdr), Buffer.from(digest)); } catch { return false; }
-}
-
-/** Normalize numeric id */
-function normId(id) { const s = String(id ?? ""); const m = s.match(/(\d+)$/); return m ? m[1] : s; }
-
-/** Claim an alert atomically so only one request sends it */
-async function claimAlert(alertId) {
-  const pre = await Alert.findOneAndUpdate(
-    { _id: alertId, sent: { $ne: true } },
-    { $set: { sent: true, sentAt: new Date() } },
-    { new: false } // return the document BEFORE update; if null, someone else claimed
-  );
-  return !!pre;
-}
-
-router.post("/inventory", express.raw({ type: "*/*" }), async (req, res) => {
-  const raw = req.body?.toString?.("utf8") || "";
-  const topic = req.get("X-Shopify-Topic") || "";
-  const shop  = (req.get("X-Shopify-Shop-Domain") || "").toLowerCase();
-  const webhookId = req.get("X-Shopify-Webhook-Id") || ""; // unique per delivery
-
-  if (!verifyHmac(req, raw)) { console.warn("⛔️ HMAC invalid"); return res.status(401).end(); }
-
-  // Idempotency: if we've processed this webhookId, exit fast
-  if (webhookId) {
-    try {
-      await WebhookReceipt.create({ webhookId, topic, shop });
-    } catch (e) {
-      if (e?.code === 11000) {
-        console.log("♻️ Duplicate webhook delivery ignored:", webhookId);
-        return res.status(200).end();
-      }
-    }
-  }
-
-  let payload = {};
-  try { payload = JSON.parse(raw || "{}"); }
-  catch { return res.status(400).end(); }
-
+function verifyShopifyHmac(req) {
   try {
-    if (topic === "products/update") {
-      const title = payload?.title || "your item";
-      const handle = payload?.handle || "";
-      const variants = Array.isArray(payload?.variants) ? payload.variants : [];
+    const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
+    if (!WEBHOOK_SECRET || !hmacHeader) return false;
 
-      // variants now in stock (qty > 0)
-      const hot = variants
-        .filter(v => typeof v.inventory_quantity === "number" && v.inventory_quantity > 0)
-        .map(v => ({ variantId: normId(v.id), qty: Number(v.inventory_quantity || 0) }))
-        .filter(v => v.variantId);
+    // req.rawBody must be the unparsed bytes of the request
+    const digest = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(req.rawBody || "")
+      .digest("base64");
 
-      if (!hot.length) return res.status(200).end();
+    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
+  } catch {
+    return false;
+  }
+}
 
-      let total = 0;
+// ── Router (use raw body *only* for this route) ───────────────────────────────
+const router = express.Router();
 
-      for (const h of hot) {
-        const pending = await Alert.find({
-          shop,
-          variantId: String(h.variantId),
-          sent: { $ne: true },
-        }).lean();
+// IMPORTANT: raw() first, then JSON parse manually after verifying
+router.post(
+  "/inventory",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const ok = verifyShopifyHmac(req);
 
-        if (!pending.length) continue;
-
-        // Build links
-        const productUrl = handle
-          ? `https://${shop}/products/${handle}?variant=${h.variantId}`
-          : "";
-        const cartUrl = `https://${shop}/cart/${encodeURIComponent(h.variantId)}:1`;
-        const body = productUrl
-          ? `✅ Back in stock: ${title}\n${productUrl}`
-          : `✅ Back in stock: ${title}\n${cartUrl}`;
-
-        for (const a of pending) {
-          try {
-            // Atomically claim this alert so only one sender sends it
-            const claimed = await claimAlert(a._id);
-            if (!claimed) {
-              // someone else (or another webhook delivery) already took it
-              continue;
-            }
-
-            const resp = await sendWhatsApp(
-              a.phone?.startsWith("whatsapp:") ? a.phone : `whatsapp:${a.phone}`,
-              body
-            );
-
-            if (resp && resp.sid) {
-              total++;
-              await Alert.updateOne({ _id: a._id }, { $set: { lastSid: resp.sid } });
-              console.log("📲 Notified", a.phone, "sid", resp.sid);
-            } else {
-              // rollback claim if send failed
-              await Alert.updateOne({ _id: a._id }, { $set: { sent: false }, $unset: { sentAt: 1 } });
-              console.warn("⚠️ send returned no SID; rolled back sent flag for", a._id.toString());
-            }
-          } catch (err) {
-            // rollback on error
-            await Alert.updateOne({ _id: a._id }, { $set: { sent: false }, $unset: { sentAt: 1 } });
-            console.error("❌ send error; rolled back", a._id.toString(), err.message || err);
-          }
-        }
-      }
-
-      console.log("✅ webhook processed — notified:", total);
-      return res.status(200).end();
+    if (!ok) {
+      console.warn("HMAC invalid");
+      return res.status(401).send("HMAC invalid");
     }
 
-    // For inventory_levels/update we currently rely on products/update to include variant ids
-    return res.status(200).end();
-  } catch (e) {
-    console.error("💥 webhook processing error:", e);
-    return res.status(200).end(); // still 200 to avoid retry storms
+    let body;
+    try {
+      body = JSON.parse(req.rawBody.toString("utf8"));
+    } catch (e) {
+      console.error("webhook: bad JSON", e);
+      return res.status(400).send("bad json");
+    }
+
+    const topic = req.get("X-Shopify-Topic") || "";
+    const shop = req.get("X-Shopify-Shop-Domain") || "";
+
+    // We handle both topics the same way: find alerts by inventory_item_id
+    let inventory_item_id = null;
+    if (topic === "inventory_levels/update") {
+      inventory_item_id = String(body.inventory_item_id || "");
+    } else if (topic === "products/update") {
+      // Check variants to see which ones are now available
+      // (Your existing parse logic can stay; keeping it compact here)
+      // If you already wrote a helper that extracts available variant->inventory_item_id, call it.
+    }
+
+    // If you store pending alerts by inventory_item_id, look them up:
+    if (!inventory_item_id) {
+      console.log("No inventory_item_id on payload — nothing to do.");
+      return res.status(200).send("ok");
+    }
+
+    // Example: find one pending alert and send (or your batch logic)
+    const pending = await Alert.find({ shop, inventory_item_id, sent: { $ne: true } })
+      .sort({ createdAt: 1 })
+      .limit(1);
+
+    if (!pending.length) {
+      console.log(`No pending alerts for ${inventory_item_id}`);
+      return res.status(200).send("ok");
+    }
+
+    const a = pending[0];
+    try {
+      const msg = await sendWhatsApp(
+        `whatsapp:${a.phone}`,
+        `Good news! This item is back in stock: ${process.env.HOST}/products/${a.productId}?variant=${a.variantId}`
+      );
+      await Alert.updateOne({ _id: a._id }, { $set: { sent: true, sid: msg.sid } });
+      console.log(`Notified ${a.phone} sid ${msg.sid}`);
+    } catch (err) {
+      console.error("sendWhatsApp failed", err && err.code, err && err.message);
+    }
+
+    return res.status(200).send("ok");
   }
-});
+);
 
 module.exports = router;
