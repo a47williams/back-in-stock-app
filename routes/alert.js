@@ -2,30 +2,40 @@
 const express = require("express");
 const router = express.Router();
 const Alert = require("../models/Alert");
+const { getVariantInventoryId } = require("../utils/shopifyApi");
 
-/**
- * Register a back-in-stock alert.
- * We now save by (shop, productId, variantId, phone) with no inventory lookup.
- * The webhook will match by variantId when the product is updated/restocked.
- */
+// POST /alerts/register
 router.post("/register", express.json(), async (req, res) => {
+  const { shop, productId, variantId, phone } = req.body || {};
+
+  console.log("➡️  /alerts/register received", { shop, productId, variantId, phone });
+
+  if (!shop || !productId || !variantId || !phone) {
+    console.log("⛔ register missing fields:", { shop, productId, variantId, phone });
+    return res.status(400).json({ error: "Missing required fields." });
+  }
+
+  let inventory_item_id = null;
+
+  // Try to enrich with inventory_item_id, but DO NOT fail if it’s unavailable
   try {
-    const { shop, productId, variantId, phone } = req.body || {};
+    inventory_item_id = await getVariantInventoryId(shop, String(variantId));
+  } catch (err) {
+    console.warn("⚠️  getVariantInventoryId failed (continuing without it):", err?.message || err);
+  }
 
-    // Minimal validation
-    const missing = [];
-    if (!shop) missing.push("shop");
-    if (!productId) missing.push("productId");
-    if (!variantId) missing.push("variantId");
-    if (!phone) missing.push("phone");
-    if (missing.length) {
-      return res.status(400).json({ error: `Missing: ${missing.join(", ")}` });
-    }
-
+  try {
     const doc = await Alert.findOneAndUpdate(
-      { shop, productId, variantId, phone },
-      { shop, productId, variantId, phone, sent: false },
-      { upsert: true, new: true }
+      { shop, variantId: String(variantId), phone },
+      {
+        shop,
+        productId: String(productId),
+        variantId: String(variantId),
+        phone: String(phone),
+        ...(inventory_item_id ? { inventory_item_id: String(inventory_item_id) } : {}),
+        sent: false,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
     console.log("✅ Alert saved", {
@@ -33,13 +43,14 @@ router.post("/register", express.json(), async (req, res) => {
       productId,
       variantId,
       phone,
+      inventory_item_id: inventory_item_id || null,
       id: doc?._id?.toString?.(),
     });
 
-    return res.json({ success: true });
+    return res.json({ success: true, id: doc?._id });
   } catch (err) {
     console.error("❌ Error saving alert", err);
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
