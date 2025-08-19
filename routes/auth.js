@@ -130,6 +130,32 @@ router.get("/callback", async (req, res) => {
       { shop, accessToken, scopes: tokenResp.scope || "" },
       { upsert: true, new: true }
     );
+// Register uninstall webhook
+await fetch(`https://${shop}/admin/api/2023-04/webhooks.json`, {
+  method: "POST",
+  headers: {
+    "X-Shopify-Access-Token": accessToken,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    webhook: {
+      topic: "app/uninstalled",
+      address: `${process.env.HOST}/uninstall/uninstall`,
+      format: "json",
+    },
+  }),
+})
+  .then(res => res.json())
+  .then(data => {
+    if (data?.webhook?.id) {
+      console.log(`✅ Uninstall webhook registered for ${shop}`);
+    } else {
+      console.warn("⚠️ Failed to register uninstall webhook", data);
+    }
+  })
+  .catch(err => {
+    console.error("❌ Error registering uninstall webhook:", err);
+  });
 
     console.log("✅ Saved access token for", shop);
 
