@@ -1,42 +1,48 @@
-const express = require("express");
-const mongoose = require("mongoose");
-const path = require("path");
-const dotenv = require("dotenv");
+const express = require('express');
+const mongoose = require('mongoose');
+const path = require('path');
+const dotenv = require('dotenv');
+const alertRoutes = require('./routes/alert');
+const authRoutes = require('./routes/auth');
+const webhookRoutes = require('./routes/webhook');
+const themeRoutes = require('./routes/theme');
+const uninstallRoutes = require('./routes/uninstall');
+const testRoutes = require('./routes/test');
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-// --- DB Setup ---
-const db = mongoose.connect(process.env.MONGODB_URI, {
+// Connect to MongoDB
+mongoose.connect(process.env.MONGO_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-});
-global.dbReady = db.then(() => console.log("✅ Connected to MongoDB")).catch(err => {
-  console.error("❌ MongoDB connection error:", err);
-});
+})
+.then(() => console.log('✅ MongoDB connected'))
+.catch((err) => console.error('❌ MongoDB connection error:', err));
 
-// --- Middleware ---
+// Middleware
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// --- Serve Static Files (HTML, CSS, etc.) ---
-app.use(express.static(path.join(__dirname, "public")));
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
 
-// --- Routes ---
-app.use("/auth", require("./routes/auth"));
-app.use("/alerts", require("./routes/alert"));
-app.use("/webhook", require("./routes/webhook"));
-app.use("/test", require("./routes/test"));
-app.use("/theme", require("./routes/theme"));
-app.use("/uninstall", require("./routes/uninstall"));
+// Routes
+app.use('/alerts', alertRoutes);
+app.use('/auth', authRoutes);
+app.use('/webhook', webhookRoutes);
+app.use('/theme', themeRoutes);
+app.use('/uninstall', uninstallRoutes);
+app.use('/test', testRoutes);
 
-// --- Root Route Redirect to Settings Page ---
-app.get("/", (req, res) => {
-  res.redirect("/settings.html");
+// Default route
+app.get('/', (req, res) => {
+  res.status(404).json({ ok: false, error: 'Not found', path: req.path });
 });
 
-// --- Start Server ---
+// Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
 });
