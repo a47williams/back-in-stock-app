@@ -1,67 +1,64 @@
 // server.js
 require("dotenv").config();
+
 const express = require("express");
 const session = require("express-session");
 const cors = require("cors");
-const mongoose = require("mongoose");
+const morgan = require("morgan");
 const path = require("path");
 
-const authRoutes = require("./routes/auth");
-const alertRoutes = require("./routes/alert");
+// --- Routes
+const authRoutes    = require("./routes/auth");
+const alertRoutes   = require("./routes/alert");
 const webhookRoutes = require("./routes/webhook");
-const testRoutes = require("./routes/test");
+const testRoutes    = require("./routes/test");
 
 const app = express();
 
 // ---------- basic middleware
-app.use(cors({ origin: true, credentials: true }));
+app.use(morgan("dev"));
+app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+// NOTE: MemoryStore is fine for dev; for prod use a durable store.
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "dev-session-secret",
+    secret: process.env.SESSION_SECRET || "dev-secret",
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: false,
+    cookie: { sameSite: "lax" },
   })
 );
 
-// ---------- DB
-(async function initDb() {
-  try {
-    if (!process.env.MONGO_URI) throw new Error("MONGO_URI missing");
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log("✅ MongoDB connected");
-  } catch (e) {
-    console.error("❌ Mongo connection error", e);
-  }
-})();
-
-// ---------- simple Admin home (fixes 'Cannot GET /')
-app.get("/", (req, res) => {
+// ---------- root page (tiny helper)
+app.get("/", (_req, res) => {
   res.type("html").send(`
-    <html><body style="font-family:system-ui;padding:24px;">
-      <h1>Back In Stock Alerts</h1>
-      <p>App running ✅</p>
+    <body style="font-family:system-ui;line-height:1.4;padding:24px">
+      <h2>Back‑in‑Stock App</h2>
       <ul>
         <li><code>GET /health</code></li>
         <li><code>GET /alerts/debug/list</code></li>
-        <li><code>GET /auth?shop=your-store.myshopify.com</code> (start OAuth)</li>
+        <li><code>GET /auth?shop=your-store.myshopify.com</code></li>
       </ul>
-    </body></html>
+    </body>
   `);
 });
 
 // ---------- health
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// ---------- routes
-app.use("/auth", authRoutes);
-app.use("/alerts", alertRoutes);
+// ---------- routes (THIS ORDER MATTERS)
+app.use("/auth",   authRoutes);      // ✅ mount auth at /auth
+app.use("/alerts", alertRoutes);     // ✅ correct variable name
 app.use("/webhook", webhookRoutes);
-app.use("/test", testRoutes);
+app.use("/test",    testRoutes);
 
 // ---------- start
-const PORT = process.env.PORT || 10000;
+const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server started at http://localhost:${PORT}`);
+  console.log(`==> Server started at http://localhost:${PORT}`);
   console.log("==> Available at your primary URL", process.env.HOST);
 });
+
+module.exports = app;
