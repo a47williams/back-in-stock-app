@@ -1,39 +1,43 @@
+// server.js
 const express = require("express");
 const mongoose = require("mongoose");
 const path = require("path");
 const dotenv = require("dotenv");
+const db = require("./db");
 
+// Load env vars
 dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// --- Connect to MongoDB ---
-mongoose
-  .connect(process.env.MONGODB_URI, {
-    dbName: process.env.DB_NAME || "back-in-stock",
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB connection error", err));
+// Mongo connection
+db.connect();
 
-// --- Serve settings.html from public/ folder ---
-app.use("/settings", express.static("public"));
+// Middleware
+app.use(express.json());
 
-// --- Routes ---
+// Serve static files (make sure this points to the correct folder)
+app.use(express.static(path.join(__dirname, "public")));
+
+// Routes
 app.use("/auth", require("./routes/auth"));
-app.use("/uninstall", require("./routes/uninstall"));
 app.use("/alerts", require("./routes/alert"));
 app.use("/webhook", require("./routes/webhook"));
 app.use("/theme", require("./routes/theme"));
+app.use("/uninstall", require("./routes/uninstall"));
 
-// --- Default route (optional) ---
+// Default route
 app.get("/", (req, res) => {
-  res.send("Back-in-Stock App is running.");
+  res.send("✅ Back-in-stock app is running.");
 });
 
-// --- Start server ---
-const PORT = process.env.PORT || 3000;
+// Catch-all 404 for unmatched routes
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: "Not found", path: req.path });
+});
+
+// Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
