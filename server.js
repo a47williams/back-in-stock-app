@@ -4,10 +4,13 @@ require("dotenv").config();
 const express = require("express");
 const session = require("express-session");
 const cors = require("cors");
-const path = require("path");
 
-// DB connect (your existing db init, if you have one)
-require("./db"); // no-op if you already connect elsewhere
+// Initialize DB (safe to require even if you already connect inside ./db)
+try {
+  require("./db");
+} catch (e) {
+  console.warn("DB init warning:", e?.message || e);
+}
 
 const authRoutes = require("./routes/auth");
 const alertRoutes = require("./routes/alert");
@@ -16,34 +19,30 @@ const testRoutes = require("./routes/test");
 
 const app = express();
 
-/* ---------- core middleware ---------- */
-app.set("trust proxy", 1); // needed on Render for secure cookies
+/* ---------- Core middleware ---------- */
+app.set("trust proxy", 1); // required for secure cookies on Render
 
 app.use(cors());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json({ limit: "1mb" }));
 
-if (!process.env.SESSION_SECRET) {
-  console.warn("⚠️ SESSION_SECRET is not set. Set it in Render -> Environment.");
-}
+const SESSION_SECRET = process.env.SESSION_SECRET || "dev-only-secret";
 app.use(
   session({
     name: "sid",
-    secret: process.env.SESSION_SECRET || "dev-only-secret",
+    secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: true,        // Render uses HTTPS
+      secure: true,     // Render is HTTPS
       httpOnly: true,
-      sameSite: "none",    // allow cross-site (Shopify admin -> your app)
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      sameSite: "none", // required for Shopify embedded/admin -> your app
+      maxAge: 30 * 24 * 60 * 60 * 1000,
     },
   })
 );
 
-/* ---------- routes ---------- */
-
-// simple index so you can see what’s mounted
+/* ---------- Simple index + health ---------- */
 app.get("/", (_req, res) => {
   res.type("html").send(`
     <h1>Back In Stock App</h1>
@@ -55,16 +54,41 @@ app.get("/", (_req, res) => {
   `);
 });
 
-// health
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    env: {
+      HOST: !!process.env.HOST,
+      MONGODB_URI: !!process.env.MONGODB_URI,
+      SHOPIFY_API_KEY: !!process.env.SHOPIFY_API_KEY,
+      SHOPIFY_API_SECRET: !!process.env.SHOPIFY_API_SECRET,
+      SESSION_SECRET: !!process.env.SESSION_SECRET,
+    },
+    ts: new Date().toISOString(),
+  });
+});
 
-// mount under explicit bases (no conflicts)
+/* ---------- Mount routes under explicit bases ---------- */
 app.use("/auth", authRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/webhook", webhookRoutes);
 app.use("/test", testRoutes);
 
-/* ---------- start ---------- */
+/* ---------- Error middleware (keeps process alive) ---------- */
+app.use((err, _req, res, _next) => {
+  console.error("Express error handler:", err?.stack || err);
+  res.status(500).json({ ok: false, error: "server_error" });
+});
+
+/* ---------- Global crash guards ---------- */
+process.on("unhandledRejection", (reason, p) => {
+  console.error("Unhandled Rejection at:", p, "reason:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+});
+
+/* ---------- Start ---------- */
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`==> Server started at http://localhost:${PORT}`);
