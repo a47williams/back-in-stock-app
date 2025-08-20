@@ -1,81 +1,79 @@
-// routes/auth.js
-
 const express = require('express');
+const router = express.Router();
 const axios = require('axios');
 const querystring = require('querystring');
 const crypto = require('crypto');
-const db = require('../db');
-const router = express.Router();
 
-const {
-  SHOPIFY_API_KEY,
-  SHOPIFY_API_SECRET,
-  SCOPES,
-  HOST,
-} = process.env;
+const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
+const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
+const SCOPES = 'read_products,write_script_tags';
+const REDIRECT_URI = `${process.env.APP_URL}/auth/callback`;
 
-function buildRedirectUri() {
-  return `${HOST}/auth/callback`;
+function buildAuthURL(shop) {
+  const state = crypto.randomBytes(8).toString('hex');
+  return {
+    url: `https://${shop}/admin/oauth/authorize?` +
+         querystring.stringify({
+           client_id: SHOPIFY_API_KEY,
+           scope: SCOPES,
+           redirect_uri: REDIRECT_URI,
+           state,
+       }),
+    state
+  };
 }
 
-function buildInstallUrl(shop) {
-  const redirectUri = buildRedirectUri();
-  const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${redirectUri}`;
-  return installUrl;
-}
+// 1. Start OAuth process
+router.get('/', (req, res) => {
+  const { shop } = req.query;
 
-function verifyHMAC(query) {
-  const { hmac, ...map } = query;
-  const message = querystring.stringify(map);
-  const generatedHash = crypto
-    .createHmac('sha256', SHOPIFY_API_SECRET)
-    .update(message)
-    .digest('hex');
-  return generatedHash === hmac;
-}
-
-router.get('/', async (req, res) => {
-  const shop = req.query.shop;
-  if (!shop) return res.status(400).send('Missing shop parameter');
-
-  const existingShop = await db.getShopByDomain(shop);
-  if (existingShop) {
-    return res.redirect(`https://${shop}/admin/apps`);
+  if (!shop) {
+    console.error('❌ Missing shop parameter');
+    return res.status(400).send('Missing shop parameter');
   }
 
-  const installUrl = buildInstallUrl(shop);
-  res.redirect(installUrl);
+  const { url, state } = buildAuthURL(shop);
+  req.session.state = state;
+
+  console.log(`🔐 Redirecting to Shopify OAuth URL: ${url}`);
+  res.redirect(url);
 });
 
+// 2. Handle callback
 router.get('/callback', async (req, res) => {
-  const { shop, code, hmac } = req.query;
-  if (!shop || !code || !hmac) {
-    return res.status(400).send('Required parameters missing');
+  const { shop, code, state } = req.query;
+
+  console.log('📦 Received OAuth callback:', req.query);
+
+  if (!shop || !code || !state) {
+    console.error('❌ Missing required parameters in callback');
+    return res.status(400).send('Missing parameters');
   }
 
-  if (!verifyHMAC(req.query)) {
-    return res.status(400).send('HMAC validation failed');
+  if (state !== req.session.state) {
+    console.error('❌ Invalid state detected');
+    return res.status(403).send('Invalid state');
   }
+
+  const accessTokenRequestUrl = `https://${shop}/admin/oauth/access_token`;
+  const payload = {
+    client_id: SHOPIFY_API_KEY,
+    client_secret: SHOPIFY_API_SECRET,
+    code,
+  };
 
   try {
-    const response = await axios.post(
-      `https://${shop}/admin/oauth/access_token`,
-      {
-        client_id: SHOPIFY_API_KEY,
-        client_secret: SHOPIFY_API_SECRET,
-        code,
-      }
-    );
-
+    const response = await axios.post(accessTokenRequestUrl, payload);
     const { access_token } = response.data;
 
-    console.log(`✅ Access token for ${shop}:`, access_token);
+    console.log('✅ Access token retrieved:', access_token);
 
-    await db.saveShop({ shop, accessToken: access_token });
+    req.session.shop = shop;
+    req.session.accessToken = access_token;
 
-    res.redirect(`https://${shop}/admin/apps`);
+    res.redirect(`/settings?shop=${shop}`);
   } catch (err) {
-    console.error('Auth callback error:', err);
+    console.error('❌ Failed to get access token:', err.message);
     res.status(500).send('Failed to get access token');
   }
 });
