@@ -6,8 +6,10 @@ const planLimits = {
   custom: Infinity
 };
 
+const { sendLimitReachedEmail } = require("../utils/sendEmail");
+
 module.exports = async (req, res, next) => {
-  const shop = req.shop; // assumes you've attached shop data earlier
+  const shop = req.shop;
 
   if (!shop) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -15,25 +17,30 @@ module.exports = async (req, res, next) => {
 
   const now = new Date();
 
-  // 🧪 Trial expired
+  // 🧪 Trial check
   if (shop.plan === "free") {
     if (shop.trialEndsAt && now > shop.trialEndsAt) {
-      // Don't return an error to the frontend
-      shop.alertLimitReached = true;
-      await shop.save();
-      return res.status(204).send(); // No Content, silent fail
+      if (!shop.alertLimitReached) {
+        shop.alertLimitReached = true;
+        await shop.save();
+        sendLimitReachedEmail(shop);
+      }
+      return res.status(204).send(); // No Content
     }
   }
 
-  // 💳 Paid plan limits
+  // 💳 Plan limit check
   const limit = planLimits[shop.plan] || 0;
 
   if (shop.alertsUsedThisMonth >= limit) {
-    shop.alertLimitReached = true;
-    await shop.save();
-    return res.status(204).send(); // No Content, silent fail
+    if (!shop.alertLimitReached) {
+      shop.alertLimitReached = true;
+      await shop.save();
+      sendLimitReachedEmail(shop);
+    }
+    return res.status(204).send(); // No Content
   }
 
-  // 🚀 All good, continue
+  // 🚀 Continue normally
   next();
 };

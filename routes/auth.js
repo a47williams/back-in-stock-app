@@ -10,7 +10,6 @@ const SCOPES = process.env.SCOPES;
 const HOST = process.env.HOST;
 const API_VERSION = process.env.SHOPIFY_API_VERSION;
 
-// 🔗 MongoDB Shop model
 const Shop = require("../models/Shop");
 
 router.get('/', (req, res) => {
@@ -70,16 +69,28 @@ router.get('/callback', async (req, res) => {
     const response = await axios.post(tokenRequestUrl, payload);
     const { access_token } = response.data;
 
-    // 📦 Store token and trial info in DB
+    // Fetch store info (for merchant email)
+    const shopDataRes = await axios.get(`https://${shop}/admin/api/${API_VERSION}/shop.json`, {
+      headers: {
+        "X-Shopify-Access-Token": access_token
+      }
+    });
+
+    const storeInfo = shopDataRes.data.shop;
+    const storeEmail = storeInfo.email;
+
+    // Set trial window
     const now = new Date();
     const trialEnds = new Date(now);
     trialEnds.setDate(trialEnds.getDate() + 7);
 
+    // Save shop + access token + email + plan info
     await Shop.findOneAndUpdate(
       { shop },
       {
         shop,
         accessToken: access_token,
+        email: storeEmail,
         plan: 'free',
         trialStartDate: now,
         trialEndsAt: trialEnds,
@@ -89,7 +100,7 @@ router.get('/callback', async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    // Redirect to your app’s main page in admin
+    // Redirect to your app’s admin interface
     const redirectUrl = `https://${shop}/admin/apps/back-in-stock-alerts`;
     return res.redirect(redirectUrl);
   } catch (err) {

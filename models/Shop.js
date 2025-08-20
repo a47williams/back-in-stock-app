@@ -14,7 +14,10 @@ const ShopSchema = new mongoose.Schema(
     trialStartDate: { type: Date },
     trialEndsAt: { type: Date },
     alertsUsedThisMonth: { type: Number, default: 0 },
-    alertLimitReached: { type: Boolean, default: false }
+    alertLimitReached: { type: Boolean, default: false },
+
+    // 📧 New field to store merchant email
+    email: { type: String }
   },
   { timestamps: true }
 );
