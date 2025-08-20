@@ -10,6 +10,9 @@ const SCOPES = process.env.SCOPES;
 const HOST = process.env.HOST;
 const API_VERSION = process.env.SHOPIFY_API_VERSION;
 
+// 🔗 MongoDB Shop model
+const Shop = require("../models/Shop");
+
 router.get('/', (req, res) => {
   const { shop } = req.query;
 
@@ -67,7 +70,24 @@ router.get('/callback', async (req, res) => {
     const response = await axios.post(tokenRequestUrl, payload);
     const { access_token } = response.data;
 
-    // Optional: Store token in DB here if needed
+    // 📦 Store token and trial info in DB
+    const now = new Date();
+    const trialEnds = new Date(now);
+    trialEnds.setDate(trialEnds.getDate() + 7);
+
+    await Shop.findOneAndUpdate(
+      { shop },
+      {
+        shop,
+        accessToken: access_token,
+        plan: 'free',
+        trialStartDate: now,
+        trialEndsAt: trialEnds,
+        alertsUsedThisMonth: 0,
+        alertLimitReached: false
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
     // Redirect to your app’s main page in admin
     const redirectUrl = `https://${shop}/admin/apps/back-in-stock-alerts`;

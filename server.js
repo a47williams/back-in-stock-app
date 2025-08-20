@@ -1,3 +1,6 @@
+const cron = require("node-cron");
+const Shop = require("./models/Shop");
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -40,6 +43,26 @@ app.get("/", (req, res) => {
     <h1>Back In Stock Alerts App</h1>
     <p>If you're seeing this, the app is running but accessed directly. Please use the Shopify interface to interact with the app.</p>
   `);
+});
+
+// === Schedule monthly alert usage reset ===
+cron.schedule("0 0 1 * *", async () => {
+  console.log("🔄 Running monthly alert usage reset...");
+
+  try {
+    const result = await Shop.updateMany(
+      {},
+      {
+        $set: {
+          alertsUsedThisMonth: 0,
+          alertLimitReached: false
+        }
+      }
+    );
+    console.log(`✅ Reset ${result.modifiedCount} shops.`);
+  } catch (err) {
+    console.error("❌ Error during reset:", err);
+  }
 });
 
 // === Start server after DB is ready ===
