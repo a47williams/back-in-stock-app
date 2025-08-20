@@ -1,55 +1,52 @@
+// server.js
 const express = require('express');
-const mongoose = require('mongoose');
-const path = require('path');
-const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
-const cors = require('cors');
+const mongoose = require('mongoose');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
+const dotenv = require('dotenv');
+const path = require('path');
+const authRoutes = require('./routes/auth');
+const alertRoutes = require('./routes/alert');
+const webhookRoutes = require('./routes/webhook');
+const uninstallRoutes = require('./routes/uninstall');
+const snippetWidgetRoutes = require('./routes/snippetWidget');
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 10000;
 
-// Middleware
-app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+// MongoDB connection
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => console.log('✅ MongoDB connected'))
+  .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// Mongoose: suppress strictQuery warning
-mongoose.set('strictQuery', true);
-
-// Use MongoStore for session management
+// Session setup
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || 'keyboard_cat',
+    secret: process.env.SHOPIFY_API_SECRET,
     resave: false,
     saveUninitialized: false,
-    store: MongoStore.create({ mongoUrl: process.env.MONGO_URI })
+    store: MongoStore.create({
+      mongoUrl: process.env.MONGO_URI
+    })
   })
 );
 
-// MongoDB connection
-mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-  })
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch((err) => console.error('❌ MongoDB connection error:', err));
-
-// Static files
-app.use(express.static(path.join(__dirname, 'public')));
+// Middleware
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
 // Routes
-app.use('/auth', require('./routes/auth'));
-app.use('/alert', require('./routes/alert'));
-app.use('/theme', require('./routes/theme'));
-app.use('/webhook', require('./routes/webhook'));
-app.use('/uninstall', require('./routes/uninstall'));
+app.use('/auth', authRoutes);
+app.use('/alert', alertRoutes);
+app.use('/webhook', webhookRoutes);
+app.use('/uninstall', uninstallRoutes);
+app.use('/', snippetWidgetRoutes);
 
-// Default route: show helpful message or redirect
+// Fallback route for browser-based access
 app.get('/', (req, res) => {
   res.send(`
     <h1>Back In Stock Alerts App</h1>
@@ -58,6 +55,7 @@ app.get('/', (req, res) => {
 });
 
 // Start server
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
 });
