@@ -1,5 +1,6 @@
 // routes/alert.js
 const express = require("express");
+const crypto = require("crypto");
 const router = express.Router();
 
 const { dbReady } = require("../db");
@@ -7,10 +8,11 @@ const Alert = require("../models/Alert");
 const Shop = require("../models/Shop");
 const { getVariantInventoryId } = require("../utils/shopifyApi");
 
-// Small helper to make sure DB is up before any query
+const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
+
 async function ensureDbReady() {
   try {
-    await dbReady; // resolves when mongoose.connect completes
+    await dbReady;
   } catch (err) {
     throw new Error(
       "database_unavailable: " + (err?.message || "could not connect")
@@ -18,12 +20,31 @@ async function ensureDbReady() {
   }
 }
 
-router.post("/register", express.json(), async (req, res) => {
+// HMAC validation middleware
+function verifyShopifyRequest(req, res, next) {
+  const hmac = req.get("X-Shopify-Hmac-Sha256");
+  if (!hmac || !SHOPIFY_API_SECRET) {
+    return res.status(400).send("Missing HMAC or secret");
+  }
+
+  const rawBody = JSON.stringify(req.body);
+  const hash = crypto
+    .createHmac("sha256", SHOPIFY_API_SECRET)
+    .update(rawBody, "utf8")
+    .digest("base64");
+
+  if (hash !== hmac) {
+    return res.status(401).send("HMAC validation failed");
+  }
+
+  next();
+}
+
+router.post("/register", express.json(), verifyShopifyRequest, async (req, res) => {
   const started = Date.now();
   try {
     const { shop, productId, variantId, phone } = req.body || {};
 
-    // Basic payload validation up front
     if (!shop || !variantId || !phone) {
       return res.status(400).json({
         ok: false,
@@ -32,22 +53,16 @@ router.post("/register", express.json(), async (req, res) => {
       });
     }
 
-    // 1) Make sure DB is connected before we touch Mongoose
     await ensureDbReady();
 
-    // 2) Verify the shop has an access token on file
     const shopDoc = await Shop.findOne({ shop }).lean();
     if (!shopDoc || !shopDoc.accessToken) {
-      // Keep the same user-facing message you saw previously
       return res.status(400).json({
         ok: false,
         error: `No access token on file for shop ${shop}`,
       });
     }
 
-    // 3) Resolve inventory_item_id for the variant
-    //    (If your util already reads token from DB, the extra lookup above
-    //     is still fine; otherwise you can pass shopDoc.accessToken to it.)
     const inventory_item_id = await getVariantInventoryId(shop, variantId);
     if (!inventory_item_id) {
       return res
@@ -55,7 +70,6 @@ router.post("/register", express.json(), async (req, res) => {
         .json({ ok: false, error: "No inventory_item_id for this variant" });
     }
 
-    // 4) Upsert the alert
     const normalizedPhone = phone.startsWith("whatsapp:")
       ? phone
       : `whatsapp:${phone}`;
