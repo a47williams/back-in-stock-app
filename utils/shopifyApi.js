@@ -1,49 +1,25 @@
-const Shop = require('../models/Shop');
-const axios = require('axios');
+// utils/shopifyApi.js
+const axios = require("axios");
+const Shop = require("../models/Shop");
 
-async function getAccessToken(shop) {
-  const record = await Shop.findOne({ shop });
-  if (!record || !record.accessToken) throw new Error('Missing access token for shop');
-  return record.accessToken;
-}
+async function getVariantInventoryId(shop, variantId) {
+  const shopDoc = await Shop.findOne({ shop });
+  if (!shopDoc || !shopDoc.accessToken) {
+    throw new Error("No access token found for shop");
+  }
 
-async function getLiveThemeId(shop, accessToken) {
-  const url = `https://${shop}/admin/api/2024-01/themes.json`;
-  const res = await axios.get(url, {
+  const url = `https://${shop}/admin/api/2023-10/variants/${variantId}.json`;
+
+  const response = await axios.get(url, {
     headers: {
-      'X-Shopify-Access-Token': accessToken,
+      "X-Shopify-Access-Token": shopDoc.accessToken,
+      "Content-Type": "application/json",
     },
   });
 
-  const theme = res.data.themes.find((t) => t.role === 'main');
-  if (!theme) throw new Error('Could not find live theme');
-  return theme.id;
-}
-
-async function addSnippetToTheme(shop, accessToken, themeId, snippet) {
-  const url = `https://${shop}/admin/api/2024-01/assets.json`;
-
-  const res = await axios.put(
-    url,
-    {
-      asset: {
-        key: 'snippets/bisw-widget.liquid',
-        value: snippet,
-      },
-    },
-    {
-      headers: {
-        'X-Shopify-Access-Token': accessToken,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-
-  return res.status === 200;
+  return response.data?.variant?.inventory_item_id || null;
 }
 
 module.exports = {
-  getAccessToken,
-  getLiveThemeId,
-  addSnippetToTheme,
+  getVariantInventoryId,
 };
