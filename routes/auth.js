@@ -1,73 +1,80 @@
-// routes/auth.js
-
 const express = require('express');
 const axios = require('axios');
-const router = express.Router();
+const crypto = require('crypto');
 const querystring = require('querystring');
+const router = express.Router();
 
-const {
-  SHOPIFY_API_KEY,
-  SHOPIFY_API_SECRET,
-  SCOPES,
-  HOST,
-} = process.env;
-
-const REDIRECT_URI = `${HOST}/auth/callback`;
-
-function buildInstallUrl(shop) {
-  const installUrl = `https://${shop}/admin/oauth/authorize?` +
-    querystring.stringify({
-      client_id: SHOPIFY_API_KEY,
-      scope: SCOPES,
-      redirect_uri: REDIRECT_URI,
-    });
-
-  return installUrl;
-}
-
-function buildAccessTokenRequestUrl(shop) {
-  return `https://${shop}/admin/oauth/access_token`;
-}
-
-function buildAccessTokenPayload(code) {
-  return {
-    client_id: SHOPIFY_API_KEY,
-    client_secret: SHOPIFY_API_SECRET,
-    code,
-  };
-}
+const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
+const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
+const SCOPES = process.env.SCOPES;
+const HOST = process.env.HOST;
+const API_VERSION = process.env.SHOPIFY_API_VERSION;
 
 router.get('/', (req, res) => {
-  const shop = req.query.shop;
+  const { shop } = req.query;
 
   if (!shop) {
-    return res.status(400).send('Missing shop parameter.');
+    return res.status(400).send('Missing shop parameter');
   }
 
-  const installUrl = buildInstallUrl(shop);
+  const redirectUri = `${HOST}/auth/callback`;
+  const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${redirectUri}`;
+
   res.redirect(installUrl);
 });
 
 router.get('/callback', async (req, res) => {
-  const { shop, code } = req.query;
+  const { shop, hmac, code, state, ...rest } = req.query;
 
-  if (!shop || !code) {
-    return res.status(400).send('Required parameters missing.');
+  if (!shop || !hmac || !code) {
+    return res.status(400).send('Required parameters missing');
   }
 
-  const accessTokenRequestUrl = buildAccessTokenRequestUrl(shop);
-  const payload = buildAccessTokenPayload(code);
+  // HMAC validation
+  const params = { ...rest, shop, code, state };
+  const message = querystring.stringify(params);
+  const providedHmac = Buffer.from(hmac, 'utf-8');
+  const generatedHash = Buffer.from(
+    crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(message)
+      .digest('hex'),
+    'utf-8'
+  );
+
+  let valid = false;
+  try {
+    valid =
+      providedHmac.length === generatedHash.length &&
+      crypto.timingSafeEqual(providedHmac, generatedHash);
+  } catch (e) {
+    return res.status(400).send('HMAC validation error');
+  }
+
+  if (!valid) {
+    return res.status(400).send('HMAC validation failed');
+  }
+
+  // Exchange code for access token
+  const tokenRequestUrl = `https://${shop}/admin/oauth/access_token`;
+  const payload = {
+    client_id: SHOPIFY_API_KEY,
+    client_secret: SHOPIFY_API_SECRET,
+    code,
+  };
 
   try {
-    const response = await axios.post(accessTokenRequestUrl, payload);
-    const accessToken = response.data.access_token;
+    const response = await axios.post(tokenRequestUrl, payload);
+    const { access_token } = response.data;
 
-    // TODO: Save the access token in your DB for future API calls
+    // Optional: Store token in DB here if needed
 
-    res.redirect(`https://${shop}/admin/apps`);
-  } catch (error) {
-    console.error('Access Token Error:', error.response?.data || error.message);
-    res.status(500).send('OAuth callback processing failed.');
+    // Redirect to your app’s main page in admin
+    const redirectUrl = `https://${shop}/admin/apps/back-in-stock-alerts`;
+    return res.redirect(redirectUrl);
+  } catch (err) {
+    console.error('Token exchange error:', err.response?.data || err.message);
+    return res.status(500).send('Error exchanging token');
   }
 });
 
