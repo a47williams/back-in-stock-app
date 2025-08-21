@@ -13,6 +13,12 @@ const priceMap = {
 router.get("/", async (req, res) => {
   const { plan, shop } = req.query;
 
+  console.log("🔍 Incoming /checkout GET");
+  console.log("🧾 Plan:", plan);
+  console.log("🏬 Shop:", shop);
+  console.log("📦 priceMap:", priceMap);
+  console.log("🎯 Selected priceId:", priceMap[plan]);
+
   if (!plan || !shop) {
     return res.status(400).send("Missing plan or shop");
   }
