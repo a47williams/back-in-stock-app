@@ -91,7 +91,7 @@ router.get('/callback', async (req, res) => {
         shop,
         accessToken: access_token,
         email: storeEmail,
-        plan: 'free',
+        plan: 'starter', // updated plan name
         trialStartDate: now,
         trialEndsAt: trialEnds,
         alertsUsedThisMonth: 0,

@@ -1,8 +1,9 @@
 // middlewares/checkPlanLimits.js
 
 const planLimits = {
-  basic: 100,
-  pro: 500,
+  micro: 150,
+  growth: 100,
+  scale: 500,
   custom: Infinity
 };
 
@@ -17,8 +18,8 @@ module.exports = async (req, res, next) => {
 
   const now = new Date();
 
-  // 🧪 Trial check
-  if (shop.plan === "free") {
+  // 🧪 Starter (formerly free) trial check
+  if (shop.plan === "starter") {
     if (shop.trialEndsAt && now > shop.trialEndsAt) {
       if (!shop.alertLimitReached) {
         shop.alertLimitReached = true;
@@ -29,7 +30,7 @@ module.exports = async (req, res, next) => {
     }
   }
 
-  // 💳 Plan limit check
+  // 💳 Plan-based alert limits
   const limit = planLimits[shop.plan] || 0;
 
   if (shop.alertsUsedThisMonth >= limit) {
@@ -41,6 +42,6 @@ module.exports = async (req, res, next) => {
     return res.status(204).send(); // No Content
   }
 
-  // 🚀 Continue normally
+  // ✅ Proceed to route handler
   next();
 };

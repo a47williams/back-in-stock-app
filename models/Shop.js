@@ -5,19 +5,17 @@ const ShopSchema = new mongoose.Schema(
     shop: { type: String, required: true, unique: true },
     accessToken: { type: String },
 
-    // ➕ New fields for billing/limits
+    // 🔄 Updated plan enums
     plan: {
       type: String,
-      enum: ["free", "basic", "pro", "custom"],
-      default: "free"
+      enum: ["starter", "micro", "growth", "scale", "custom"],
+      default: "starter"
     },
     trialStartDate: { type: Date },
     trialEndsAt: { type: Date },
-    alertsUsedThisMonth: { type: Number, default: 0 },
-    alertLimitReached: { type: Boolean, default: false },
 
-    // 📧 New field to store merchant email
-    email: { type: String }
+    alertsUsedThisMonth: { type: Number, default: 0 },
+    alertLimitReached: { type: Boolean, default: false }
   },
   { timestamps: true }
 );
