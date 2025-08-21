@@ -7,7 +7,10 @@ const Shop = require("../models/Shop");
 const { getVariantInventoryId } = require("../utils/shopifyApi");
 const checkPlanLimits = require("../middlewares/checkPlanLimits");
 
-// Helper to make sure DB is connected
+const { sendWhatsApp } = require("../utils/sendWhatsApp"); // Twilio
+const { sendWhatsApp360 } = require("../utils/sendWhatsApp360"); // 360dialog
+
+// Ensure DB connection
 async function ensureDbReady() {
   try {
     await dbReady;
@@ -33,12 +36,9 @@ router.post("/register", express.json(), async (req, res, next) => {
       });
     }
 
-    // Attach shopDoc to req for middleware use
     req.shop = shopDoc;
 
-    // Run the plan limiter before continuing
     return checkPlanLimits(req, res, async () => {
-      // Plan OK — proceed with registration logic
       const { productId, variantId, phone } = req.body || {};
       console.log("🔍 Incoming alert payload:", req.body);
 
@@ -81,6 +81,22 @@ router.post("/register", express.json(), async (req, res, next) => {
         inventory_item_id,
         phone: normalizedPhone,
       });
+
+      // 🔁 Try to send WhatsApp message
+      try {
+        if (process.env.D360_API_KEY) {
+          await sendWhatsApp360(normalizedPhone, {
+            productName: productId,
+            shopName: shop
+          });
+          console.log("📤 Sent via 360dialog");
+        } else {
+          await sendWhatsApp(normalizedPhone, "Your item is back in stock!");
+          console.log("📤 Sent via Twilio");
+        }
+      } catch (msgErr) {
+        console.error("❌ WhatsApp send failed:", msgErr);
+      }
 
       return res.status(200).json({ ok: true });
     });
