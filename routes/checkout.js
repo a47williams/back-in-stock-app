@@ -9,6 +9,34 @@ const priceMap = {
   custom: process.env.STRIPE_PRICE_CUSTOM
 };
 
+// 🟢 GET route for browser-based access
+router.get("/", async (req, res) => {
+  const { plan, shop } = req.query;
+
+  if (!plan || !shop) {
+    return res.status(400).send("Missing plan or shop");
+  }
+
+  const priceId = priceMap[plan];
+  if (!priceId) return res.status(400).send("Invalid plan selected");
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      metadata: { plan, shop },
+      success_url: `${process.env.HOST}/settings?success=1`,
+      cancel_url: `${process.env.HOST}/settings?canceled=1`
+    });
+
+    return res.redirect(303, session.url); // Stripe-hosted checkout
+  } catch (err) {
+    console.error("❌ Stripe GET session error:", err.message);
+    return res.status(500).send("Stripe error");
+  }
+});
+
+// 🔁 POST route for API use
 router.post("/create-session", async (req, res) => {
   const { plan, shop } = req.body;
   const priceId = priceMap[plan];
