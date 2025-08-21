@@ -39,7 +39,7 @@ router.post("/register", express.json(), async (req, res, next) => {
     req.shop = shopDoc;
 
     return checkPlanLimits(req, res, async () => {
-      const { productId, variantId, phone } = req.body || {};
+      const { productId, variantId, phone, productHandle } = req.body || {};
       console.log("🔍 Incoming alert payload:", req.body);
 
       if (!variantId || !phone) {
@@ -91,7 +91,10 @@ router.post("/register", express.json(), async (req, res, next) => {
           });
           console.log("📤 Sent via 360dialog");
         } else {
-          await sendWhatsApp(normalizedPhone, "Your item is back in stock!");
+          const productLink = `https://${shop}/products/${productHandle || productId}`;
+          const message = `📦 Good news! A product you're watching is back in stock at ${shop}.\n\n🛒 View now: ${productLink}\n\nHurry before it sells out!`;
+
+          await sendWhatsApp(normalizedPhone, message);
           console.log("📤 Sent via Twilio");
         }
       } catch (msgErr) {

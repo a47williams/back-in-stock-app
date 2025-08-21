@@ -1,63 +1,37 @@
-const fetch = require("node-fetch");
+const twilio = require("twilio");
 
-const API_KEY = process.env.D360_API_KEY; // Your 360dialog API Key
-const PHONE_NUMBER_ID = process.env.D360_PHONE_NUMBER_ID; // Your WhatsApp Business Phone ID
-const TEMPLATE_NAME = process.env.WHATSAPP_TEMPLATE_NAME || "back_in_stock_alert";
+const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const WHATSAPP_NUMBER = process.env.TWILIO_WHATSAPP_NUMBER;
 
+if (!ACCOUNT_SID || !AUTH_TOKEN || !WHATSAPP_NUMBER) {
+  throw new Error("❌ Twilio credentials not set in environment variables.");
+}
+
+const client = twilio(ACCOUNT_SID, AUTH_TOKEN);
+
+/**
+ * Send a WhatsApp message using Twilio
+ * @param {string} to - Recipient number in international format (e.g. +1234567890)
+ * @param {string} message - Message text to send
+ * @param {object} opts - Optional data
+ */
 async function sendWhatsApp(to, message = "", opts = {}) {
-  if (!API_KEY || !PHONE_NUMBER_ID) {
-    throw new Error("360dialog API key or phone number ID not set.");
-  }
-
   if (!to || !to.startsWith("+")) {
     throw new Error("Phone number must be in international format (e.g., +1234567890)");
   }
 
-  const url = `https://waba.360dialog.io/v1/messages`;
-  const headers = {
-    "Content-Type": "application/json",
-    "D360-API-KEY": API_KEY
-  };
-
-  const payload = {
-    to,
-    type: "template",
-    template: {
-      namespace: "whatsapp:hsm", // default namespace, or your own
-      language: {
-        code: "en", // change to your approved template language code
-        policy: "deterministic"
-      },
-      name: TEMPLATE_NAME,
-      components: [
-        {
-          type: "body",
-          parameters: (opts.templateData || []).map(val => ({
-            type: "text",
-            text: val
-          }))
-        }
-      ]
-    }
-  };
-
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload)
+    const msg = await client.messages.create({
+      from: `whatsapp:${WHATSAPP_NUMBER}`,
+      to: `whatsapp:${to}`,
+      body: message
     });
 
-    const data = await response.json();
-    if (!response.ok) {
-      console.error("❌ 360dialog error:", data);
-      throw new Error("360dialog message failed");
-    }
-
-    console.log("✅ WhatsApp message sent via 360dialog:", data);
-    return data;
+    console.log("✅ WhatsApp message sent via Twilio:", msg.sid);
+    return msg;
   } catch (err) {
-    console.error("❌ Failed to send WhatsApp message:", err);
+    console.error("❌ Failed to send WhatsApp message via Twilio:", err);
     throw err;
   }
 }
