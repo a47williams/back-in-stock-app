@@ -13,7 +13,8 @@ const webhookRoutes = require("./routes/webhook");
 const uninstallRoutes = require("./routes/uninstall");
 const themeRoutes = require("./routes/theme");
 const snippetWidgetRoutes = require("./routes/snippetWidget");
-
+const stripeWebhookRoutes = require("./routes/stripeWebhook"); // ✅ Webhook handler
+const checkoutRoutes = require("./routes/checkout");
 const { dbReady } = require("./db");
 
 const app = express();
@@ -26,6 +27,9 @@ app.use(
   })
 );
 
+// === Stripe webhook (raw body middleware required)
+app.use("/stripe", stripeWebhookRoutes);
+
 // === Shopify app routes ===
 app.use("/auth", authRoutes);
 app.use("/alerts", alertRoutes);
@@ -33,6 +37,7 @@ app.use("/webhooks", webhookRoutes);
 app.use("/uninstall", uninstallRoutes);
 app.use("/theme", themeRoutes);
 app.use("/widget", snippetWidgetRoutes);
+app.use("/checkout", checkoutRoutes);
 
 // === Serve settings.html for embedded app views ===
 app.use("/settings", express.static(path.join(__dirname, "public", "settings.html")));
