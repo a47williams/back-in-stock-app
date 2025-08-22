@@ -33,8 +33,9 @@ router.get('/callback', async (req, res) => {
     return res.status(400).send('Required parameters missing');
   }
 
-  // ✅ HMAC Validation (fixed)
+  // ✅ HMAC Validation (with debug)
   const params = { ...rest, shop, code, state };
+
   const sortedParams = Object.keys(params)
     .sort()
     .map(key => `${key}=${encodeURIComponent(params[key])}`)
@@ -48,6 +49,10 @@ router.get('/callback', async (req, res) => {
       .digest('hex'),
     'utf-8'
   );
+
+  console.log("🔍 Sorted Params:", sortedParams);
+  console.log("🔍 Provided HMAC:", hmac);
+  console.log("🔍 Generated HMAC:", generatedHash.toString("utf8"));
 
   let valid = false;
   try {
