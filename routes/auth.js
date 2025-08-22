@@ -1,7 +1,6 @@
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const querystring = require('querystring');
 const router = express.Router();
 
 const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
@@ -12,6 +11,7 @@ const API_VERSION = process.env.SHOPIFY_API_VERSION;
 
 const Shop = require("../models/Shop");
 
+// Step 1: OAuth Redirect
 router.get('/', (req, res) => {
   const { shop } = req.query;
 
@@ -25,6 +25,7 @@ router.get('/', (req, res) => {
   res.redirect(installUrl);
 });
 
+// Step 2: OAuth Callback
 router.get('/callback', async (req, res) => {
   const { shop, hmac, code, state, ...rest } = req.query;
 
@@ -32,14 +33,18 @@ router.get('/callback', async (req, res) => {
     return res.status(400).send('Required parameters missing');
   }
 
-  // HMAC validation
+  // ✅ HMAC Validation (fixed)
   const params = { ...rest, shop, code, state };
-  const message = querystring.stringify(params);
+  const sortedParams = Object.keys(params)
+    .sort()
+    .map(key => `${key}=${encodeURIComponent(params[key])}`)
+    .join("&");
+
   const providedHmac = Buffer.from(hmac, 'utf-8');
   const generatedHash = Buffer.from(
     crypto
       .createHmac('sha256', SHOPIFY_API_SECRET)
-      .update(message)
+      .update(sortedParams)
       .digest('hex'),
     'utf-8'
   );
@@ -69,7 +74,7 @@ router.get('/callback', async (req, res) => {
     const response = await axios.post(tokenRequestUrl, payload);
     const { access_token } = response.data;
 
-    // Fetch store info (for merchant email)
+    // Get merchant's email
     const shopDataRes = await axios.get(`https://${shop}/admin/api/${API_VERSION}/shop.json`, {
       headers: {
         "X-Shopify-Access-Token": access_token
@@ -79,19 +84,19 @@ router.get('/callback', async (req, res) => {
     const storeInfo = shopDataRes.data.shop;
     const storeEmail = storeInfo.email;
 
-    // Set trial window
+    // Set trial period (7 days)
     const now = new Date();
     const trialEnds = new Date(now);
     trialEnds.setDate(trialEnds.getDate() + 7);
 
-    // Save shop + access token + email + plan info
+    // Save shop to DB
     await Shop.findOneAndUpdate(
       { shop },
       {
         shop,
         accessToken: access_token,
         email: storeEmail,
-        plan: 'starter', // updated plan name
+        plan: 'starter',
         trialStartDate: now,
         trialEndsAt: trialEnds,
         alertsUsedThisMonth: 0,
@@ -100,7 +105,7 @@ router.get('/callback', async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    // Redirect to your app’s admin interface
+    // Redirect to embedded app
     const redirectUrl = `https://${shop}/admin/apps/back-in-stock-alerts`;
     return res.redirect(redirectUrl);
   } catch (err) {
