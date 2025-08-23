@@ -1,5 +1,3 @@
-// routes/stripeWebhook.js
-
 const express = require("express");
 const router = express.Router();
 const Stripe = require("stripe");
@@ -9,7 +7,7 @@ const Shop = require("../models/Shop");
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-// Stripe needs the raw body for webhook signature verification
+// Stripe requires raw body for webhook verification
 router.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
@@ -33,14 +31,25 @@ router.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req
     }
 
     try {
-      await Shop.findOneAndUpdate(
+      const result = await Shop.findOneAndUpdate(
         { shop },
         {
-          plan,
-          alertLimitReached: false,
-        }
+          $set: {
+            plan,
+            alertLimitReached: false,
+            alertsUsedThisMonth: 0,
+            planActivatedAt: new Date(),
+            trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14-day trial
+          }
+        },
+        { new: true }
       );
-      console.log(`✅ Updated plan to ${plan} for ${shop}`);
+
+      if (!result) {
+        console.warn(`⚠️ Webhook: No shop found for ${shop}`);
+      } else {
+        console.log(`✅ Webhook: Plan set to ${plan} for ${shop}`);
+      }
     } catch (err) {
       console.error("❌ Failed to update shop plan from webhook:", err.message);
     }
