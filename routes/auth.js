@@ -11,7 +11,7 @@ const API_VERSION = process.env.SHOPIFY_API_VERSION;
 
 const Shop = require("../models/Shop");
 
-// === Step 1: Begin OAuth flow ===
+// Step 1: OAuth Redirect
 router.get('/', (req, res) => {
   const { shop } = req.query;
 
@@ -25,84 +25,92 @@ router.get('/', (req, res) => {
   res.redirect(installUrl);
 });
 
-// === Step 2: Handle OAuth callback ===
+// Step 2: OAuth Callback
 router.get('/callback', async (req, res) => {
-  const { hmac, ...params } = req.query;
+  const { shop, hmac, code, state, ...rest } = req.query;
 
-  if (!params.shop || !params.code) {
+  if (!shop || !hmac || !code) {
     return res.status(400).send('Required parameters missing');
   }
 
-  // ✅ Step 2a: HMAC validation
-  const queryString = Object.keys(params)
-    .filter(key => key !== 'signature') // Exclude deprecated 'signature'
+  // HMAC Validation
+  const params = { ...rest, shop, code, state };
+  const sortedParams = Object.keys(params)
     .sort()
     .map(key => `${key}=${encodeURIComponent(params[key])}`)
-    .join('&');
+    .join("&");
 
   const providedHmac = Buffer.from(hmac, 'utf-8');
   const generatedHash = Buffer.from(
-    crypto.createHmac('sha256', SHOPIFY_API_SECRET).update(queryString).digest('hex'),
+    crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(sortedParams)
+      .digest('hex'),
     'utf-8'
   );
 
-  let isValid = false;
+  let valid = false;
   try {
-    isValid =
+    valid =
       providedHmac.length === generatedHash.length &&
       crypto.timingSafeEqual(providedHmac, generatedHash);
-  } catch (err) {
+  } catch (e) {
     return res.status(400).send('HMAC validation error');
   }
 
-  if (!isValid) {
+  if (!valid) {
     return res.status(400).send('HMAC validation failed');
   }
 
-  // ✅ Step 2b: Exchange code for access token
+  // Exchange code for access token
+  const tokenRequestUrl = `https://${shop}/admin/oauth/access_token`;
+  const payload = {
+    client_id: SHOPIFY_API_KEY,
+    client_secret: SHOPIFY_API_SECRET,
+    code,
+  };
+
   try {
-    const tokenResponse = await axios.post(`https://${params.shop}/admin/oauth/access_token`, {
-      client_id: SHOPIFY_API_KEY,
-      client_secret: SHOPIFY_API_SECRET,
-      code: params.code,
+    const response = await axios.post(tokenRequestUrl, payload);
+    const { access_token } = response.data;
+
+    // Get merchant's email
+    const shopDataRes = await axios.get(`https://${shop}/admin/api/${API_VERSION}/shop.json`, {
+      headers: {
+        "X-Shopify-Access-Token": access_token
+      }
     });
 
-    const accessToken = tokenResponse.data.access_token;
+    const storeInfo = shopDataRes.data.shop;
+    const storeEmail = storeInfo.email;
 
-    // ✅ Step 2c: Get store email/info
-    const shopData = await axios.get(`https://${params.shop}/admin/api/${API_VERSION}/shop.json`, {
-      headers: { 'X-Shopify-Access-Token': accessToken }
-    });
-
-    const store = shopData.data.shop;
-    const email = store.email;
-
-    // ✅ Step 2d: Save shop info
+    // Set trial period (7 days)
     const now = new Date();
     const trialEnds = new Date(now);
     trialEnds.setDate(trialEnds.getDate() + 7);
 
+    // Save shop to DB
     await Shop.findOneAndUpdate(
-      { shop: params.shop },
+      { shop },
       {
-        shop: params.shop,
-        accessToken,
-        email,
+        shop,
+        accessToken: access_token,
+        email: storeEmail,
         plan: 'starter',
         trialStartDate: now,
         trialEndsAt: trialEnds,
         alertsUsedThisMonth: 0,
         alertLimitReached: false
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    // ✅ Step 2e: Redirect to embedded admin app
-    res.redirect(`https://${params.shop}/admin/apps/back-in-stock-alerts`);
-
+    // ✅ Redirect to embedded settings page
+    const redirectUrl = `${HOST}/settings?shop=${shop}`;
+    return res.redirect(redirectUrl);
   } catch (err) {
     console.error('Token exchange error:', err.response?.data || err.message);
-    return res.status(500).send('Error during token exchange or shop info fetch');
+    return res.status(500).send('Error exchanging token');
   }
 });
 
