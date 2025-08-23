@@ -33,7 +33,11 @@ router.get('/callback', async (req, res) => {
     return res.status(400).send('Required parameters missing');
   }
 
-  // ✅ HMAC Validation (with debug)
+  // 🪵 Debug: Show full query
+  console.log("📦 Raw query object:", req.query);
+  console.log("📦 Query keys:", Object.keys(req.query));
+
+  // ✅ HMAC Validation
   const params = { ...rest, shop, code, state };
 
   const sortedParams = Object.keys(params)
@@ -50,9 +54,9 @@ router.get('/callback', async (req, res) => {
     'utf-8'
   );
 
-  console.log("🔍 Sorted Params:", sortedParams);
-  console.log("🔍 Provided HMAC:", hmac);
-  console.log("🔍 Generated HMAC:", generatedHash.toString("utf8"));
+  console.log("🧮 Sorted Params:", sortedParams);
+  console.log("🔐 Provided HMAC:", hmac);
+  console.log("🔐 Generated HMAC:", generatedHash.toString("utf8"));
 
   let valid = false;
   try {
@@ -67,7 +71,7 @@ router.get('/callback', async (req, res) => {
     return res.status(400).send('HMAC validation failed');
   }
 
-  // Exchange code for access token
+  // 🎫 Exchange code for access token
   const tokenRequestUrl = `https://${shop}/admin/oauth/access_token`;
   const payload = {
     client_id: SHOPIFY_API_KEY,
@@ -79,7 +83,7 @@ router.get('/callback', async (req, res) => {
     const response = await axios.post(tokenRequestUrl, payload);
     const { access_token } = response.data;
 
-    // Get merchant's email
+    // 📬 Get shop email
     const shopDataRes = await axios.get(`https://${shop}/admin/api/${API_VERSION}/shop.json`, {
       headers: {
         "X-Shopify-Access-Token": access_token
@@ -89,12 +93,12 @@ router.get('/callback', async (req, res) => {
     const storeInfo = shopDataRes.data.shop;
     const storeEmail = storeInfo.email;
 
-    // Set trial period (7 days)
+    // 📆 Set trial period
     const now = new Date();
     const trialEnds = new Date(now);
     trialEnds.setDate(trialEnds.getDate() + 7);
 
-    // Save shop to DB
+    // 💾 Save to DB
     await Shop.findOneAndUpdate(
       { shop },
       {
@@ -110,7 +114,7 @@ router.get('/callback', async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    // Redirect to embedded app
+    // 🛠 Redirect to embedded app
     const redirectUrl = `https://${shop}/admin/apps/back-in-stock-alerts`;
     return res.redirect(redirectUrl);
   } catch (err) {
