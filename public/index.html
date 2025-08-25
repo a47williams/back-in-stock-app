@@ -1,99 +1,98 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Northstar Apps</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body {
+    body, html {
       margin: 0;
+      padding: 0;
+      height: 100%;
       font-family: Arial, sans-serif;
-      background-color: #e8f0ff;
-      color: #333;
-      text-align: center;
     }
 
-    .header {
-      background-color: #003366;
+    .wrapper {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    header {
+      background-color: #003B87;
+      text-align: center;
       padding: 20px;
     }
 
-    .logo {
-      max-width: 120px;
+    header img {
+      width: 100px;
       margin-bottom: 10px;
     }
 
-    h1 {
+    header h1 {
       color: white;
       margin: 0;
     }
 
-    .container {
-      padding: 40px 20px;
+    main {
+      flex: 1;
+      text-align: center;
+      background-color: #E6F0FF;
+      padding: 50px 20px;
     }
 
-    .container h2 {
+    h2 {
       font-size: 24px;
-      color: #222;
+      margin-bottom: 10px;
     }
 
-    .container p {
+    p {
       font-size: 16px;
-      color: #444;
+      margin-bottom: 20px;
     }
 
-    .btn {
-      background-color: #007bff;
-      color: white;
-      padding: 12px 24px;
-      font-size: 16px;
+    .install-button {
+      padding: 10px 20px;
+      background-color: #007BFF;
       border: none;
-      border-radius: 4px;
-      margin-top: 20px;
+      color: white;
+      font-size: 16px;
       cursor: pointer;
+      border-radius: 4px;
       text-decoration: none;
     }
 
-    .btn:hover {
-      background-color: #0056b3;
-    }
-
-    .footer {
-      background-color: #f5f5f5;
+    footer {
+      background-color: #F5F5F5;
+      text-align: center;
       padding: 15px;
       font-size: 14px;
     }
 
-    .footer a {
-      color: #007bff;
+    footer a {
+      color: #007BFF;
       text-decoration: none;
-    }
-
-    .footer a:hover {
-      text-decoration: underline;
+      margin: 0 5px;
     }
   </style>
 </head>
 <body>
+  <div class="wrapper">
+    <header>
+      <img src="/northstar-logo.png" alt="Northstar Logo" />
+      <h1>Northstar Apps</h1>
+    </header>
 
-  <div class="header">
-    <img src="/images/northstar-logo.png" alt="Northstar Apps Logo" class="logo">
-    <h1>Northstar Apps</h1>
+    <main>
+      <h2>Back in Stock Alerts for Shopify</h2>
+      <p>Automatically notify your customers when products are restocked. Easy setup, smart alerts, and seamless Shopify integration.</p>
+      <a href="/auth?shop=back-in-stock-alerts-app.myshopify.com" class="install-button">Install Now</a>
+    </main>
+
+    <footer>
+      Contact us: <a href="mailto:northstarshopapps@gmail.com">northstarshopapps@gmail.com</a> |
+      <a href="https://instagram.com/northstarapps" target="_blank">@northstarapps</a>
+    </footer>
   </div>
-
-  <div class="container">
-    <h2>Back in Stock Alerts for Shopify</h2>
-    <p>
-      Automatically notify your customers when products are restocked.
-      Easy setup, smart alerts, and seamless Shopify integration.
-    </p>
-    <a class="btn" href="/auth?shop=your-store.myshopify.com">Install Now</a>
-  </div>
-
-  <div class="footer">
-    Contact us: <a href="mailto:northstarshopapps@gmail.com">northstarshopapps@gmail.com</a> |
-    <a href="https://instagram.com/northstarapps" target="_blank">@northstarapps</a>
-  </div>
-
 </body>
 </html>
