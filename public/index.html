@@ -3,84 +3,92 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Back in Stock Alerts</title>
+  <title>Northstar Apps</title>
   <style>
     body {
       margin: 0;
-      font-family: system-ui, sans-serif;
-      background: linear-gradient(135deg, #0078D7 0%, #005BB5 100%);
-      color: #fff;
+      font-family: Arial, sans-serif;
+      background: #e6f0ff;
+      color: #333;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      text-align: center;
-      padding: 80px 20px 40px;
       min-height: 100vh;
-      box-sizing: border-box;
     }
-    .content {
+
+    header {
+      background-color: #004aad;
+      color: white;
+      padding: 20px 0;
+      text-align: center;
+    }
+
+    main {
+      flex: 1;
+      padding: 40px 20px;
+      text-align: center;
+    }
+
+    .content h2 {
+      font-size: 28px;
+      margin-bottom: 10px;
+    }
+
+    .content p {
+      font-size: 18px;
       max-width: 600px;
+      margin: 0 auto 30px;
     }
-    h1 {
-      font-size: 3rem;
-      margin-bottom: 0.5rem;
-    }
-    h2 {
-      font-size: 1.5rem;
-      font-weight: 400;
-      color: #e0e0e0;
-      margin-bottom: 30px;
-    }
-    p {
-      font-size: 1.1rem;
-      line-height: 1.6;
-      margin-bottom: 40px;
-    }
+
     .install-btn {
-      padding: 16px 32px;
-      background-color: #fff;
-      color: #0078D7;
-      border: none;
-      border-radius: 8px;
-      font-size: 1.1rem;
-      font-weight: bold;
+      background-color: #007bff;
+      color: white;
+      padding: 12px 24px;
       text-decoration: none;
-      transition: background 0.3s ease, transform 0.2s ease;
-      display: inline-block;
+      border-radius: 6px;
+      font-weight: bold;
+      transition: background-color 0.3s ease;
     }
+
     .install-btn:hover {
-      background-color: #f0f0f0;
-      transform: translateY(-2px);
+      background-color: #0056b3;
     }
+
     footer {
-      margin-top: 60px;
-      font-size: 0.95rem;
-      color: #cbdfff;
+      background-color: #f0f0f0;
+      text-align: center;
+      padding: 20px;
+      font-size: 14px;
     }
+
     footer a {
-      color: #ffffff;
+      color: #007bff;
+      text-decoration: none;
+      margin: 0 8px;
+    }
+
+    footer a:hover {
       text-decoration: underline;
     }
   </style>
 </head>
 <body>
-  <div class="content">
-    <h1>Northstar Apps</h1>
-    <h2>Back‑in‑Stock Alerts for Shopify</h2>
-    <p>
-      Instantly notify your customers via WhatsApp when products are restocked. 
-      Effortless integration with Shopify, no coding required.
-    </p>
-    <a 
-      href="/auth?shop=back-in-stock-alerts-app.myshopify.com" 
-      class="install-btn"
-    >
-      Install Now
-    </a>
 
-    <footer>
-      <p>Contact us: <a href="mailto:northstarshopapps@gmail.com">northstarshopapps@gmail.com</a> | Instagram: <a href="https://instagram.com/northstarapps" target="_blank">@northstarapps</a></p>
-    </footer>
-  </div>
+  <header>
+    <h1>Northstar Apps</h1>
+  </header>
+
+  <main>
+    <div class="content">
+      <h2>Back in Stock Alerts for Shopify</h2>
+      <p>Automatically notify your customers when products are restocked. Easy setup, smart alerts, and seamless Shopify integration.</p>
+      <a class="install-btn" href="/auth?shop=your-store.myshopify.com">Install Now</a>
+    </div>
+  </main>
+
+  <footer>
+    <p>Contact us: <a href="mailto:northstarshopapps@gmail.com">northstarshopapps@gmail.com</a> | 
+    <a href="https://www.instagram.com/northstarapps" target="_blank">@northstarapps</a></p>
+  </footer>
+
 </body>
 </html>
