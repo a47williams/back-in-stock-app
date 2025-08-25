@@ -4,55 +4,71 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Back in Stock Alerts App</title>
+  <title>Back in Stock Alerts</title>
   <style>
     body {
       margin: 0;
       font-family: system-ui, sans-serif;
-      background: #0d6efd; /* Blue background */
+      background: linear-gradient(135deg, #0078D7 0%, #005BB5 100%);
       color: #fff;
       display: flex;
       flex-direction: column;
       align-items: center;
       text-align: center;
-      padding: 60px 20px;
-      height: 100vh;
+      padding: 80px 20px;
+      min-height: 100vh;
       box-sizing: border-box;
+    }
+    .content {
+      max-width: 600px;
     }
     h1 {
       font-size: 3rem;
       margin-bottom: 0.5rem;
     }
+    h2 {
+      font-size: 1.5rem;
+      font-weight: 400;
+      color: #e0e0e0;
+      margin-bottom: 30px;
+    }
     p {
-      font-size: 1.2rem;
-      max-width: 600px;
+      font-size: 1.1rem;
+      line-height: 1.6;
       margin-bottom: 40px;
-      line-height: 1.5;
     }
     .install-btn {
-      display: inline-block;
-      padding: 14px 28px;
+      padding: 16px 32px;
       background-color: #fff;
-      color: #0d6efd;
-      border-radius: 6px;
-      text-decoration: none;
+      color: #0078D7;
+      border: none;
+      border-radius: 8px;
       font-size: 1.1rem;
       font-weight: bold;
-      transition: background 0.3s ease, color 0.3s ease;
+      text-decoration: none;
+      transition: background 0.3s ease, transform 0.2s ease;
+      display: inline-block;
     }
     .install-btn:hover {
-      background-color: #e0e0e0;
-      color: #0b5ed7;
+      background-color: #f0f0f0;
+      transform: translateY(-2px);
     }
   </style>
 </head>
 <body>
-  <h1>Northstar Apps</h1>
-  <p>
-    Back in Stock Alerts for Shopify. Automatically notify customers via WhatsApp when products are restocked—no code required, fast setup.
-  </p>
-  <a href="/auth?shop=back-in-stock-alerts-app.myshopify.com" class="install-btn">
-    Install Now
-  </a>
+  <div class="content">
+    <h1>Northstar Apps</h1>
+    <h2>Back‑in‑Stock Alerts for Shopify</h2>
+    <p>
+      Instantly notify your customers via WhatsApp when products are restocked. 
+      Effortless integration with Shopify, no coding required.
+    </p>
+    <a 
+      href="/auth?shop=back-in-stock-alerts-app.myshopify.com" 
+      class="install-btn"
+    >
+      Install Now
+    </a>
+  </div>
 </body>
 </html>
