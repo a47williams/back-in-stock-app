@@ -1,3 +1,5 @@
+// utils/snippetWidget.js
+
 module.exports = function generateWidgetSnippet(apiUrl) {
   return `
 {% comment %}
@@ -82,56 +84,7 @@ Back‑in‑Stock WhatsApp Widget Snippet — inserted automatically
 </style>
 
 <script>
-  document.addEventListener("DOMContentLoaded", () => {
-    const root = document.getElementById("bisw-root");
-    const form = document.getElementById("bisw-form");
-    const input = document.getElementById("bisw-phone");
-    const msg = document.getElementById("bisw-msg");
-
-    const productId = window.location.pathname.split("/").pop();
-    const apiUrl = root.dataset.api;
-
-    if (!apiUrl) {
-      console.error("Missing data-api on widget container.");
-      return;
-    }
-
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      msg.textContent = "";
-      const phone = input.value.trim();
-
-      if (!phone) {
-        msg.textContent = "Please enter your WhatsApp number.";
-        return;
-      }
-
-      try {
-        const res = await fetch(\`\${apiUrl}/widget/subscribe\`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            shop: Shopify.shop,
-            productId,
-            phone,
-          }),
-        });
-
-        if (res.status === 204 || res.status === 200) {
-          msg.textContent = "🎉 You’re subscribed!";
-          form.reset();
-        } else {
-          const data = await res.json();
-          msg.textContent = data.message || "Error subscribing.";
-        }
-      } catch (err) {
-        console.error(err);
-        msg.textContent = "Error subscribing.";
-      }
-    });
-
-    root.querySelector(".bisw-card").style.display = "block";
-  });
+// JavaScript logic injected separately
 </script>
 `;
 };
