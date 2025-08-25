@@ -1,5 +1,3 @@
-app.use(express.static(path.join(__dirname, "public")));
-
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -20,7 +18,7 @@ const Shop = require("./models/Shop");
 
 const app = express();
 
-// === CORS (Optional for frontend dev)
+// === CORS for dev or embedded app
 app.use(
   cors({
     origin: "*",
@@ -28,10 +26,16 @@ app.use(
   })
 );
 
-// === Stripe webhook requires raw body
+// === Parse JSON
+app.use(express.json());
+
+// === Serve public folder for landing page
+app.use(express.static(path.join(__dirname, "public"))); // ✅ Static website folder
+
+// === Stripe webhook
 app.use("/stripe", stripeWebhookRoutes);
 
-// === App routes
+// === Shopify app routes
 app.use("/auth", authRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/webhooks", webhookRoutes);
@@ -40,23 +44,25 @@ app.use("/theme", themeRoutes);
 app.use("/widget", snippetWidgetRoutes);
 app.use("/checkout", checkoutRoutes);
 
-// === Serve public settings page for embedded app
-app.use("/settings", express.static(path.join(__dirname, "public", "settings.html")));
-
-// === Root fallback
-app.get("/", (req, res) => {
-  res.send(`<h1>Back In Stock Alerts App</h1><p>Use via Shopify app store.</p>`);
+// === Serve embedded app HTML (optional)
+app.get("/settings", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "settings.html"));
 });
 
-// === Monthly alert reset
+// === Root fallback (optional for debugging)
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html")); // ✅ Homepage
+});
+
+// === Monthly alert usage reset
 cron.schedule("0 0 1 * *", async () => {
   console.log("🔄 Running monthly alert usage reset...");
   try {
     const result = await Shop.updateMany({}, {
       $set: {
         alertsUsedThisMonth: 0,
-        alertLimitReached: false
-      }
+        alertLimitReached: false,
+      },
     });
     console.log(`✅ Reset ${result.modifiedCount} shops.`);
   } catch (err) {
@@ -64,7 +70,7 @@ cron.schedule("0 0 1 * *", async () => {
   }
 });
 
-// === Start server
+// === Start server after DB is ready
 dbReady.then(() => {
   const PORT = process.env.PORT || 10000;
   app.listen(PORT, () => {
