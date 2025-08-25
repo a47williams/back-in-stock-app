@@ -83,7 +83,55 @@ Back‑in‑Stock WhatsApp Widget Snippet — inserted automatically
 </style>
 
 <script>
-// Skipping JS for now, will include in the next step
+document.addEventListener("DOMContentLoaded", () => {
+  const root = document.getElementById("bisw-root");
+  const form = document.getElementById("bisw-form");
+  const phoneInput = document.getElementById("bisw-phone");
+  const msgBox = document.getElementById("bisw-msg");
+
+  if (!root || !form || !phoneInput || !msgBox) return;
+
+  const api = root.getAttribute("data-api");
+  const productId = window.meta?.product?.id || Shopify?.product?.id || null;
+  const shop = Shopify?.shop || window.shop || location.hostname;
+
+  if (!productId) return;
+
+  document.querySelector(".bisw-card").style.display = "block";
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const phone = phoneInput.value.trim();
+
+    if (!phone) {
+      msgBox.textContent = "Please enter a valid WhatsApp number.";
+      return;
+    }
+
+    msgBox.textContent = "Submitting...";
+
+    try {
+      const res = await fetch(\`\${api}/widget/subscribe\`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ phone, productId, shop }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        msgBox.textContent = "🎉 You’re subscribed!";
+        form.reset();
+      } else {
+        msgBox.textContent = data.message || "Subscription failed.";
+      }
+    } catch (err) {
+      msgBox.textContent = "Error connecting to server.";
+    }
+  });
+});
 </script>
 `;
 };
