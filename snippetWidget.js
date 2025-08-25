@@ -1,4 +1,3 @@
-// snippetWidget.js
 module.exports = function generateWidgetSnippet(apiUrl) {
   return `
 {% comment %}
@@ -43,7 +42,7 @@ Back‑in‑Stock WhatsApp Widget Snippet — inserted automatically
 <style>
   .bisw { margin-top: 18px; }
   .bisw-card {
-    display: none;
+    display: block;
     border: 1px solid rgba(17, 24, 39, .08);
     border-radius: 16px;
     padding: 16px;
@@ -83,55 +82,47 @@ Back‑in‑Stock WhatsApp Widget Snippet — inserted automatically
 </style>
 
 <script>
-document.addEventListener("DOMContentLoaded", () => {
-  const root = document.getElementById("bisw-root");
-  const form = document.getElementById("bisw-form");
-  const phoneInput = document.getElementById("bisw-phone");
-  const msgBox = document.getElementById("bisw-msg");
+  document.addEventListener("DOMContentLoaded", function () {
+    const form = document.getElementById("bisw-form");
+    const phoneInput = document.getElementById("bisw-phone");
+    const msg = document.getElementById("bisw-msg");
+    const root = document.getElementById("bisw-root");
 
-  if (!root || !form || !phoneInput || !msgBox) return;
+    const apiUrl = root.dataset.api;
+    const shop = Shopify.shop || window.location.hostname.replace("www.", "");
+    const productId = meta?.product?.id;
 
-  const api = root.getAttribute("data-api");
-  const productId = window.meta?.product?.id || Shopify?.product?.id || null;
-  const shop = Shopify?.shop || window.shop || location.hostname;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
 
-  if (!productId) return;
-
-  document.querySelector(".bisw-card").style.display = "block";
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const phone = phoneInput.value.trim();
-
-    if (!phone) {
-      msgBox.textContent = "Please enter a valid WhatsApp number.";
-      return;
-    }
-
-    msgBox.textContent = "Submitting...";
-
-    try {
-      const res = await fetch(\`\${api}/widget/subscribe\`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ phone, productId, shop }),
-      });
-
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        msgBox.textContent = "🎉 You’re subscribed!";
-        form.reset();
-      } else {
-        msgBox.textContent = data.message || "Subscription failed.";
+      const phone = phoneInput.value.trim();
+      if (!phone) {
+        msg.textContent = "Please enter a phone number.";
+        return;
       }
-    } catch (err) {
-      msgBox.textContent = "Error connecting to server.";
-    }
+
+      try {
+        const response = await fetch(\`\${apiUrl}/widget/subscribe\`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ shop, productId, phone }),
+        });
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+          msg.textContent = "🎉 You’ll be notified when it’s restocked!";
+          form.reset();
+        } else {
+          msg.textContent = result.message || "Something went wrong.";
+        }
+      } catch (err) {
+        msg.textContent = "Failed to subscribe. Try again later.";
+      }
+    });
   });
-});
 </script>
 `;
 };
