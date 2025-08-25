@@ -10,7 +10,7 @@ const alertRoutes = require("./routes/alert");
 const webhookRoutes = require("./routes/webhook");
 const uninstallRoutes = require("./routes/uninstall");
 const themeRoutes = require("./routes/theme");
-const snippetWidgetRoutes = require("./routes/snippetWidget");
+
 const stripeWebhookRoutes = require("./routes/stripeWebhook");
 const checkoutRoutes = require("./routes/checkout");
 const { dbReady } = require("./db");
@@ -41,7 +41,7 @@ app.use("/alerts", alertRoutes);
 app.use("/webhooks", webhookRoutes);
 app.use("/uninstall", uninstallRoutes);
 app.use("/theme", themeRoutes);
-app.use("/widget", snippetWidgetRoutes);
+
 app.use("/checkout", checkoutRoutes);
 
 // === Serve embedded app HTML (optional)
