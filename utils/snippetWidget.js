@@ -1,12 +1,7 @@
-// utils/snippetWidget.js
-
 module.exports = function generateWidgetSnippet(apiUrl) {
   return `
-{% comment %}
-Back‑in‑Stock WhatsApp Widget Snippet — inserted automatically
-{% endcomment %}
-
-<div id="bisw-root" class="bisw" data-api="${apiUrl}">
+<!-- Comment for Shopify snippet -->
+<div id="bisw-root" data-api="${apiUrl}" class="bisw">
   <div class="bisw-card" role="region" aria-label="Back in stock alert">
     <div class="bisw-head">
       <div class="bisw-title">Get notified when this is back</div>
@@ -84,7 +79,38 @@ Back‑in‑Stock WhatsApp Widget Snippet — inserted automatically
 </style>
 
 <script>
-// JavaScript logic injected separately
+document.addEventListener("DOMContentLoaded", function () {
+  const root = document.getElementById("bisw-root");
+  const form = root.querySelector("form");
+  const phone = root.querySelector("input[type='tel']");
+  const msg = root.querySelector(".bisw-msg");
+  const shop = Shopify.shop || window.location.hostname.replace("www.", "");
+  const productId = window.location.pathname.split("/").pop();
+  const api = root.getAttribute("data-api");
+
+  form.addEventListener("submit", async function(e) {
+    e.preventDefault();
+    msg.textContent = "";
+    try {
+      const res = await fetch(\`\${api}/widget/subscribe\`, {
+        method: "POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify({ shop, productId, phone: phone.value })
+      });
+      if (res.ok) {
+        msg.textContent = "🎉 Subscribed!";
+        form.reset();
+      } else {
+        const data = await res.json().catch(() => {});
+        msg.textContent = data?.message || "Subscription failed.";
+      }
+    } catch {
+      msg.textContent = "Network error.";
+    }
+  });
+
+  root.querySelector(".bisw-card").style.display = "block";
+});
 </script>
 `;
 };
