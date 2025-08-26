@@ -1,3 +1,4 @@
+// routes/widget.js
 const express = require("express");
 const router = express.Router();
 const Subscriber = require("../models/Subscriber");
@@ -10,10 +11,10 @@ router.post("/subscribe", async (req, res) => {
 
   try {
     await Subscriber.create({ shop, productId, phone });
-    return res.status(200).json({ success: true, message: "Subscribed!" });
+    return res.status(200).json({ success: true, message: "You’re subscribed!" });
   } catch (err) {
     console.error("Subscription error:", err);
-    return res.status(500).json({ success: false, message: "Server error" });
+    return res.status(500).json({ success: false, message: "Server error subscribing" });
   }
 });
 

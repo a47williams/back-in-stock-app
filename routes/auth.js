@@ -10,6 +10,7 @@ const HOST = process.env.HOST;
 const API_VERSION = process.env.SHOPIFY_API_VERSION;
 
 const Shop = require("../models/Shop");
+const injectSnippet = require("../utils/injectSnippet"); // ✅ Add this
 
 // === Step 1: Begin OAuth install ===
 router.get('/', (req, res) => {
@@ -80,7 +81,7 @@ router.get('/callback', async (req, res) => {
     const shopInfo = shopRes.data.shop;
     const shopEmail = shopInfo.email;
 
-    // ✅ Save to DB with trial
+    // ✅ Save to DB with trial info
     const now = new Date();
     const trialEnds = new Date(now);
     trialEnds.setDate(trialEnds.getDate() + 7);
@@ -99,6 +100,9 @@ router.get('/callback', async (req, res) => {
       },
       { upsert: true, new: true }
     );
+
+    // ✅ Inject storefront widget script
+    await injectSnippet(params.shop, access_token);
 
     // ✅ Redirect to embedded app settings
     const redirectUrl = `${HOST}/settings?shop=${params.shop}`;

@@ -1,12 +1,18 @@
-// routes/theme.js
-
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const router = express.Router();
-const { injectSnippet } = require("../utils/snippetWidget");
-const { getAccessToken } = require("../utils/shopifyApi");
-// const ensureHmac = require("../utils/hmac"); // 🔒 Removed for now since hmac.js doesn't exist
 
-// Endpoint to inject widget snippet into theme
+const injectSnippet = require("../utils/injectSnippet"); // ✅ Add this
+const { getAccessToken } = require("../utils/shopifyApi");
+
+// Optional: Read widget code from file if needed elsewhere
+const widgetCode = fs.readFileSync(
+  path.join(__dirname, "../public/snippetWidget.js"),
+  "utf-8"
+);
+
+// === Endpoint to manually inject widget into theme ===
 router.post("/inject", async (req, res) => {
   const shop = req.query.shop;
   if (!shop) {
