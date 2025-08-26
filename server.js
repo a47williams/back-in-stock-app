@@ -1,3 +1,5 @@
+// server.js
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -10,9 +12,10 @@ const alertRoutes = require("./routes/alert");
 const webhookRoutes = require("./routes/webhook");
 const uninstallRoutes = require("./routes/uninstall");
 const themeRoutes = require("./routes/theme");
-const widgetRoutes = require("./routes/widget");
+const snippetWidgetRoutes = require("./routes/snippetWidget");
 const stripeWebhookRoutes = require("./routes/stripeWebhook");
 const checkoutRoutes = require("./routes/checkout");
+const widgetRoutes = require("./routes/widget"); // ✅ Widget subscribe endpoint
 const { dbReady } = require("./db");
 const Shop = require("./models/Shop");
 
@@ -26,32 +29,33 @@ app.use(
   })
 );
 
-// === Parse JSON
+// === Parse JSON for non-webhook routes
 app.use(express.json());
 
-// === Serve public folder for landing page
-app.use(express.static(path.join(__dirname, "public"))); // ✅ Static website folder
+// === Serve static landing page
+app.use(express.static(path.join(__dirname, "public")));
 
-// === Stripe webhook
+// === Stripe raw webhook
 app.use("/stripe", stripeWebhookRoutes);
 
-// === Shopify app routes
+// === Shopify App Routes
 app.use("/auth", authRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/webhooks", webhookRoutes);
 app.use("/uninstall", uninstallRoutes);
 app.use("/theme", themeRoutes);
-app.use("/widget", widgetRoutes);
+app.use("/widget", snippetWidgetRoutes);
 app.use("/checkout", checkoutRoutes);
+app.use("/subscribe", widgetRoutes); // ✅ WhatsApp subscribe endpoint
 
-// === Serve embedded app HTML (optional)
+// === Serve embedded settings page
 app.get("/settings", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "settings.html"));
 });
 
-// === Root fallback (optional for debugging)
+// === Root fallback
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html")); // ✅ Homepage
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // === Monthly alert usage reset
