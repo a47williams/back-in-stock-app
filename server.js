@@ -1,5 +1,4 @@
 // server.js
-
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -12,10 +11,9 @@ const alertRoutes = require("./routes/alert");
 const webhookRoutes = require("./routes/webhook");
 const uninstallRoutes = require("./routes/uninstall");
 const themeRoutes = require("./routes/theme");
-const snippetWidgetRoutes = require("./routes/snippetWidget");
 const stripeWebhookRoutes = require("./routes/stripeWebhook");
 const checkoutRoutes = require("./routes/checkout");
-const widgetRoutes = require("./routes/widget"); // ✅ Widget subscribe endpoint
+
 const { dbReady } = require("./db");
 const Shop = require("./models/Shop");
 
@@ -29,33 +27,31 @@ app.use(
   })
 );
 
-// === Parse JSON for non-webhook routes
+// === Parse JSON
 app.use(express.json());
 
-// === Serve static landing page
-app.use(express.static(path.join(__dirname, "public")));
+// === Serve public folder for landing page
+app.use(express.static(path.join(__dirname, "public"))); // ✅ Static website folder
 
-// === Stripe raw webhook
+// === Stripe webhook
 app.use("/stripe", stripeWebhookRoutes);
 
-// === Shopify App Routes
+// === Shopify app routes
 app.use("/auth", authRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/webhooks", webhookRoutes);
 app.use("/uninstall", uninstallRoutes);
 app.use("/theme", themeRoutes);
-app.use("/widget", snippetWidgetRoutes);
 app.use("/checkout", checkoutRoutes);
-app.use("/subscribe", widgetRoutes); // ✅ WhatsApp subscribe endpoint
 
-// === Serve embedded settings page
+// === Serve embedded app HTML (optional)
 app.get("/settings", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "settings.html"));
 });
 
-// === Root fallback
+// === Root fallback (optional for debugging)
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(path.join(__dirname, "public", "index.html")); // ✅ Homepage
 });
 
 // === Monthly alert usage reset
