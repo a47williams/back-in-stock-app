@@ -1,34 +1,16 @@
 // routes/theme.js
 
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
 const router = express.Router();
 
 const injectSnippet = require("../utils/injectSnippet");
 const { getAccessToken } = require("../utils/shopifyApi");
-
-// (Optional) Try to read the widget code at boot. Not required for injection,
-// but useful if you reference it elsewhere. Wrapped to avoid crashing on boot.
-let widgetCode = "";
-try {
-  widgetCode = fs.readFileSync(
-    path.join(__dirname, "../public/snippetWidget.js"),
-    "utf-8"
-  );
-} catch (e) {
-  console.warn(
-    "⚠️ Could not read ../public/snippetWidget.js at startup (ok if not needed):",
-    e.message
-  );
-}
 
 // Basic shop domain validation to avoid accidental bad inputs
 function isValidShop(shop) {
   return /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop);
 }
 
-// Shared handler used by POST (and optional GET) routes
 async function handleInject(req, res) {
   const shop = (req.query.shop || "").trim();
 
@@ -41,7 +23,7 @@ async function handleInject(req, res) {
 
   try {
     const accessToken = await getAccessToken(shop);
-    const result = await injectSnippet(shop, accessToken);
+    const result = await injectSnippet(shop, accessToken); // may inject via theme or script_tag (fallback)
     return res.status(200).json({ ok: true, result });
   } catch (err) {
     console.error("Injection error:", err?.response?.data || err.message || err);
