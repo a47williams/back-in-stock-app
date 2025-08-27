@@ -27,20 +27,27 @@ app.use(
   })
 );
 
-// === Parse JSON
-app.use(express.json());
-
-// === Serve public folder for landing page
+// === Public assets (landing page + snippetWidget.js)
 app.use(express.static(path.join(__dirname, "public"))); // ✅ Static website folder
 
-// === Stripe webhook
-app.use("/stripe", stripeWebhookRoutes);
+// --- Webhook routes that require RAW body for HMAC/signature verification ---
+// ✅ Shopify App Uninstalled webhook (expects raw body for HMAC)
+app.use("/uninstall", express.raw({ type: "application/json" }), uninstallRoutes);
+
+// ✅ Stripe webhooks (Stripe requires raw body for signature verification)
+// If your stripeWebhookRoutes already parse JSON internally, ensure they read req.body as Buffer.
+app.use("/stripe", express.raw({ type: "application/json" }), stripeWebhookRoutes);
+
+// If you also verify HMAC for other Shopify webhooks in routes/webhook.js,
+// consider mounting them with express.raw too. If not, keep JSON parsing below.
+
+// === Parse JSON for the rest of the app
+app.use(express.json());
 
 // === Shopify app routes
 app.use("/auth", authRoutes);
 app.use("/alerts", alertRoutes);
-app.use("/webhooks", webhookRoutes);
-app.use("/uninstall", uninstallRoutes);
+app.use("/webhooks", webhookRoutes); // If you need raw here, mount before express.json with express.raw
 app.use("/theme", themeRoutes);
 app.use("/checkout", checkoutRoutes);
 
@@ -58,12 +65,15 @@ app.get("/", (req, res) => {
 cron.schedule("0 0 1 * *", async () => {
   console.log("🔄 Running monthly alert usage reset...");
   try {
-    const result = await Shop.updateMany({}, {
-      $set: {
-        alertsUsedThisMonth: 0,
-        alertLimitReached: false,
-      },
-    });
+    const result = await Shop.updateMany(
+      {},
+      {
+        $set: {
+          alertsUsedThisMonth: 0,
+          alertLimitReached: false,
+        },
+      }
+    );
     console.log(`✅ Reset ${result.modifiedCount} shops.`);
   } catch (err) {
     console.error("❌ Error during reset:", err);
