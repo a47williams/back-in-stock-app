@@ -12,39 +12,21 @@ async function getAccessToken(shop) {
 }
 
 async function getVariantInventoryId(shop, variantId) {
-  if (!shop) throw new Error("Missing shop");
-  if (!variantId) throw new Error("Missing variantId");
-  const accessToken = await getAccessToken(shop);
-
+  const token = await getAccessToken(shop);
   const url = `https://${shop}/admin/api/${API_VERSION}/variants/${variantId}.json`;
-  const response = await axios.get(url, {
-    headers: {
-      "X-Shopify-Access-Token": accessToken,
-      "Content-Type": "application/json",
-    },
+  const { data } = await axios.get(url, {
+    headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
   });
-
-  return response.data?.variant?.inventory_item_id ?? null;
+  return data?.variant?.inventory_item_id ?? null;
 }
 
 async function getVariantProductId(shop, variantId) {
-  if (!shop) throw new Error("Missing shop");
-  if (!variantId) throw new Error("Missing variantId");
-  const accessToken = await getAccessToken(shop);
-
+  const token = await getAccessToken(shop);
   const url = `https://${shop}/admin/api/${API_VERSION}/variants/${variantId}.json`;
-  const response = await axios.get(url, {
-    headers: {
-      "X-Shopify-Access-Token": accessToken,
-      "Content-Type": "application/json",
-    },
+  const { data } = await axios.get(url, {
+    headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
   });
-
-  return response.data?.variant?.product_id ?? null;
+  return data?.variant?.product_id ?? null;
 }
 
-module.exports = {
-  getAccessToken,
-  getVariantInventoryId,
-  getVariantProductId,
-};
+module.exports = { getAccessToken, getVariantInventoryId, getVariantProductId };

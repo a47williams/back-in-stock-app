@@ -4,12 +4,7 @@ const router = express.Router();
 const Subscriber = require("../models/Subscriber");
 const { getVariantProductId, getVariantInventoryId } = require("../utils/shopifyApi");
 
-/**
- * POST /widget/subscribe
- * Body: { shop, phone, productId?, variantId? }
- * Requires: shop + phone + (productId OR variantId)
- * Stores: shop, phone, productId (derived if missing), variantId, inventoryItemId (if variantId provided)
- */
+// POST /widget/subscribe
 router.post("/subscribe", async (req, res) => {
   try {
     const { shop, phone, productId, variantId } = req.body || {};
@@ -18,39 +13,31 @@ router.post("/subscribe", async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing fields" });
     }
 
-    // Derive productId if only variantId provided
+    // derive fields when possible
     let finalProductId = productId || null;
-    if (!finalProductId && variantId) {
-      try {
-        finalProductId = await getVariantProductId(shop, variantId);
-      } catch (e) {
-        console.warn("[BIS] derive productId failed:", e.message);
-      }
-    }
-
-    // Derive inventory_item_id for fast webhook matching later
     let inventoryItemId = null;
+
     if (variantId) {
-      try {
-        inventoryItemId = await getVariantInventoryId(shop, variantId);
-      } catch (e) {
-        console.warn("[BIS] derive inventoryItemId failed:", e.message);
+      try { finalProductId = finalProductId || await getVariantProductId(shop, variantId); } catch (e) {
+        console.warn("[BIS] productId derive fail:", e.message);
+      }
+      try { inventoryItemId = await getVariantInventoryId(shop, variantId); } catch (e) {
+        console.warn("[BIS] inventoryItemId derive fail:", e.message);
       }
     }
 
-    // Upsert to avoid duplicates (shop + phone + productId/variantId)
-    // Adjust to your schema/index if needed.
     const filter = {
       shop,
       phone,
-      ...(variantId ? { variantId } : { productId: finalProductId || null }),
+      ...(variantId ? { variantId: String(variantId) } : { productId: String(finalProductId || "") }),
     };
+
     const update = {
       shop,
       phone,
-      productId: finalProductId || null,
-      variantId: variantId || null,
-      inventoryItemId: inventoryItemId || null,
+      productId: finalProductId ? String(finalProductId) : null,
+      variantId: variantId ? String(variantId) : null,
+      inventoryItemId: inventoryItemId ? String(inventoryItemId) : null,
       updatedAt: new Date(),
     };
 
@@ -58,6 +45,14 @@ router.post("/subscribe", async (req, res) => {
       new: true,
       upsert: true,
       setDefaultsOnInsert: true,
+    });
+
+    console.log("[BIS] subscribed:", {
+      shop,
+      id: String(doc._id),
+      productId: doc.productId,
+      variantId: doc.variantId,
+      inventoryItemId: doc.inventoryItemId,
     });
 
     return res.status(200).json({
@@ -70,16 +65,11 @@ router.post("/subscribe", async (req, res) => {
     });
   } catch (err) {
     console.error("Subscription error:", err);
-    return res
-      .status(500)
-      .json({ success: false, message: "Server error subscribing" });
+    return res.status(500).json({ success: false, message: "Server error subscribing" });
   }
 });
 
-/**
- * GET /widget/debug?shop=xxx&limit=10
- * Quick debug endpoint: list recent subs for a shop
- */
+// GET /widget/debug?shop=...&limit=10
 router.get("/debug", async (req, res) => {
   try {
     const shop = (req.query.shop || "").trim();
