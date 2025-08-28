@@ -13,7 +13,7 @@ const uninstallRoutes = require("./routes/uninstall");
 const themeRoutes = require("./routes/theme");
 const stripeWebhookRoutes = require("./routes/stripeWebhook");
 const checkoutRoutes = require("./routes/checkout");
-
+const widgetRoutes = require("./routes/widget");
 const { dbReady } = require("./db");
 const Shop = require("./models/Shop");
 
@@ -50,6 +50,8 @@ app.use("/alerts", alertRoutes);
 app.use("/webhooks", webhookRoutes); // If you need raw here, mount before express.json with express.raw
 app.use("/theme", themeRoutes);
 app.use("/checkout", checkoutRoutes);
+app.use("/widget", widgetRoutes);
+
 
 // === Serve embedded app HTML (optional)
 app.get("/settings", (req, res) => {
