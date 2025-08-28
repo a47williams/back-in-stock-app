@@ -1,13 +1,13 @@
+// public/snippetWidget.js
 (function () {
-  // Bail if a Liquid widget exists
-  if (document.getElementById("bisw-root")) return;
-
-  // Prevent double init
+  // NOTE: we no longer bail if a Liquid block exists—duplicates are handled by using a single #back-in-stock-widget
   if (window.__BIS_WIDGET_INIT__) return;
   window.__BIS_WIDGET_INIT__ = true;
 
   const API_HOST = "https://back-in-stock-app.onrender.com";
   const WIDGET_ID = "back-in-stock-widget";
+
+  function log(){ try{ console.debug("[BIS]", ...arguments); }catch{} }
 
   function getProduct() { return window?.Shopify?.product || null; }
   function productForms() { return Array.from(document.querySelectorAll('form[action*="/cart/add"]')); }
@@ -32,24 +32,37 @@
   }
   function findVariantById(id) {
     const p = getProduct();
-    if (!p?.variants) return null;
+    if (!p || !Array.isArray(p.variants)) return null;
     return p.variants.find(v => Number(v.id) === Number(id)) || null;
+  }
+  function atcButton() {
+    return (
+      document.querySelector('form[action*="/cart/add"] [type="submit"]') ||
+      document.querySelector('button[name="add"]') ||
+      document.querySelector('button.add-to-cart') ||
+      null
+    );
   }
   function isSelectedVariantSoldOut() {
     const vid = currentVariantId();
     const v = vid ? findVariantById(vid) : null;
-    if (v && typeof v.available === "boolean") return v.available === false;
 
-    const atc =
-      document.querySelector('form[action*="/cart/add"] [type="submit"]') ||
-      document.querySelector('button[name="add"]') ||
-      document.querySelector('button.add-to-cart');
+    if (v && typeof v.available === "boolean") {
+      const out = v.available === false;
+      log("availability via Shopify.product", { vid, available: v.available, out });
+      return out;
+    }
 
+    const atc = atcButton();
     if (atc) {
       const disabled = atc.disabled || atc.hasAttribute("disabled");
       const label = (atc.innerText || atc.value || "").toLowerCase();
-      return disabled || /sold\s*out|unavailable/.test(label);
+      const out = disabled || /sold\s*out|unavailable/.test(label);
+      log("availability via ATC fallback", { disabled, label, out });
+      return out;
     }
+
+    log("availability unknown -> hide");
     return false;
   }
 
@@ -119,7 +132,6 @@
         const text = await res.text();
         let data = {};
         try { data = text ? JSON.parse(text) : {}; } catch {}
-
         if (res.ok) {
           msg.textContent = data.message || "🎉 You’re subscribed!";
           form.reset();
@@ -135,8 +147,11 @@
 
   function render() {
     const container = mountContainer();
-    container.style.display = isSelectedVariantSoldOut() ? "block" : "none";
+    const show = isSelectedVariantSoldOut();
+    container.style.display = show ? "block" : "none";
+    log("render", { show, vid: currentVariantId() });
   }
+
   function bindWatchers() {
     const form = visibleProductForm();
     if (form) {
@@ -157,12 +172,13 @@
   }
 
   function init() {
-    // initial + safety renders
+    // Initial + safety re-renders in case theme fills id late
     setTimeout(render, 0);
     bindWatchers();
     setTimeout(render, 150);
     setTimeout(render, 500);
     setTimeout(render, 1200);
+    setTimeout(render, 2000);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
