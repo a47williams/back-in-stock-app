@@ -1,116 +1,134 @@
-const express = require('express');
-const axios = require('axios');
-const crypto = require('crypto');
+// routes/auth.js
+const express = require("express");
+const axios = require("axios");
+const crypto = require("crypto");
 const router = express.Router();
+
+const Shop = require("../models/Shop");
+const { registerWebhooks } = require("../utils/registerWebhooks");
+const injectSnippet = require("../utils/injectSnippet");
 
 const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
-const SCOPES = process.env.SCOPES;
-const HOST = process.env.HOST;
-const API_VERSION = process.env.SHOPIFY_API_VERSION;
+const SCOPES = process.env.SCOPES || "read_products,read_themes,write_themes,write_script_tags";
+const HOST = (process.env.HOST || "").replace(/\/$/, "");
+const API_VERSION = process.env.SHOPIFY_API_VERSION || "2024-04";
 
-const Shop = require("../models/Shop");
-const injectSnippet = require("../utils/injectSnippet"); // ✅ Add this
+// helpers
+function isValidShop(shop) {
+  return /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop || "");
+}
+function timingSafeEq(a, b) {
+  try {
+    return crypto.timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+  } catch {
+    return false;
+  }
+}
 
 // === Step 1: Begin OAuth install ===
-router.get('/', (req, res) => {
-  const { shop } = req.query;
-
-  if (!shop) {
-    return res.status(400).send('Missing shop parameter');
-  }
+router.get("/", (req, res) => {
+  const shop = (req.query.shop || "").trim();
+  if (!isValidShop(shop)) return res.status(400).send("Missing or invalid shop");
 
   const redirectUri = `${HOST}/auth/callback`;
-  const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${redirectUri}`;
+  // simple state for CSRF mitigation (optional: persist and check)
+  const state = crypto.randomBytes(12).toString("hex");
 
-  res.redirect(installUrl);
+  const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}` +
+    `&scope=${encodeURIComponent(SCOPES)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&state=${state}`;
+
+  return res.redirect(installUrl);
 });
 
 // === Step 2: OAuth callback handler ===
-router.get('/callback', async (req, res) => {
-  const { hmac, ...params } = req.query;
+router.get("/callback", async (req, res) => {
+  const { hmac, signature, shop, code, state, ...rest } = req.query;
 
-  if (!params.shop || !params.code) {
-    return res.status(400).send('Required parameters missing');
+  if (!isValidShop(shop) || !code || !hmac) {
+    return res.status(400).send("Required parameters missing");
   }
 
-  // ✅ Correct HMAC validation
-  const message = Object.keys(params)
-    .filter(key => key !== 'signature')
+  // HMAC validation (exclude hmac & signature)
+  const message = Object.keys({ shop, code, state, ...rest })
+    .filter((k) => k !== "hmac" && k !== "signature")
     .sort()
-    .map(key => `${key}=${params[key]}`)
-    .join('&');
+    .map((k) => `${k}=${req.query[k]}`)
+    .join("&");
 
-  const providedHmac = Buffer.from(hmac, 'utf-8');
-  const generatedHmac = Buffer.from(
-    crypto.createHmac('sha256', SHOPIFY_API_SECRET).update(message).digest('hex'),
-    'utf-8'
-  );
-
-  let isValid = false;
-  try {
-    isValid = crypto.timingSafeEqual(providedHmac, generatedHmac);
-  } catch (e) {
-    return res.status(400).send('HMAC validation error');
+  const computed = crypto.createHmac("sha256", SHOPIFY_API_SECRET).update(message).digest("hex");
+  if (!timingSafeEq(hmac, computed)) {
+    console.error("🔐 HMAC mismatch. Expected:", computed, "Got:", hmac);
+    return res.status(400).send("HMAC validation failed");
   }
 
-  if (!isValid) {
-    console.error("🔐 HMAC mismatch:\nExpected:", generatedHmac.toString(), "\nGot:", hmac);
-    return res.status(400).send('HMAC validation failed');
-  }
-
-  // ✅ Exchange code for access token
-  const tokenRequestUrl = `https://${params.shop}/admin/oauth/access_token`;
-  const payload = {
-    client_id: SHOPIFY_API_KEY,
-    client_secret: SHOPIFY_API_SECRET,
-    code: params.code,
-  };
-
+  // Exchange code for access token
   try {
-    const response = await axios.post(tokenRequestUrl, payload);
-    const { access_token } = response.data;
-
-    // ✅ Get shop info
-    const shopRes = await axios.get(`https://${params.shop}/admin/api/${API_VERSION}/shop.json`, {
-      headers: {
-        "X-Shopify-Access-Token": access_token
-      }
+    const tokenRes = await axios.post(`https://${shop}/admin/oauth/access_token`, {
+      client_id: SHOPIFY_API_KEY,
+      client_secret: SHOPIFY_API_SECRET,
+      code,
     });
 
-    const shopInfo = shopRes.data.shop;
-    const shopEmail = shopInfo.email;
+    const access_token = tokenRes.data?.access_token;
+    if (!access_token) throw new Error("No access_token in response");
 
-    // ✅ Save to DB with trial info
+    // Fetch shop info
+    const shopRes = await axios.get(`https://${shop}/admin/api/${API_VERSION}/shop.json`, {
+      headers: { "X-Shopify-Access-Token": access_token },
+    });
+    const shopInfo = shopRes.data?.shop || {};
+    const shopEmail = shopInfo.email || null;
+
+    // Upsert shop record
     const now = new Date();
     const trialEnds = new Date(now);
     trialEnds.setDate(trialEnds.getDate() + 7);
 
-    await Shop.findOneAndUpdate(
-      { shop: params.shop },
+    const doc = await Shop.findOneAndUpdate(
+      { shop },
       {
-        shop: params.shop,
+        shop,
         accessToken: access_token,
         email: shopEmail,
-        plan: 'starter',
+        installed: true,
+        plan: "starter",
         trialStartDate: now,
         trialEndsAt: trialEnds,
         alertsUsedThisMonth: 0,
-        alertLimitReached: false
+        alertLimitReached: false,
+        updatedAt: now,
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    // ✅ Inject storefront widget script
-    await injectSnippet(params.shop, access_token);
+    // Ensure Shopify webhooks are registered
+    try {
+      const regs = await registerWebhooks(shop, access_token, HOST);
+      console.log("✅ Webhooks ensured:", regs);
+    } catch (e) {
+      console.error("❌ Webhook registration failed:", e?.response?.data || e.message);
+    }
 
-    // ✅ Redirect to embedded app settings
-    const redirectUrl = `${HOST}/settings?shop=${params.shop}`;
+    // Optional: auto-inject widget (theme injection preferred if scope allows; falls back to ScriptTag)
+    try {
+      const result = await injectSnippet(shop, access_token);
+      console.log("✅ Widget injection result:", result);
+      if (result?.method === "script_tag" && result?.details?.id) {
+        await Shop.updateOne({ shop }, { scriptTagId: result.details.id });
+      }
+    } catch (e) {
+      console.error("⚠️ Widget injection failed:", e?.response?.data || e.message);
+    }
+
+    // Redirect merchant to app settings (embedded app page)
+    const redirectUrl = `${HOST}/settings?shop=${encodeURIComponent(shop)}`;
     return res.redirect(redirectUrl);
-
   } catch (err) {
-    console.error('❌ OAuth callback error:', err.response?.data || err.message);
-    return res.status(500).send('Error during token exchange or shop info fetch');
+    console.error("❌ OAuth callback error:", err?.response?.data || err.message);
+    return res.status(500).send("Error during token exchange or shop info fetch");
   }
 });
 

@@ -1,142 +1,156 @@
 // routes/webhook.js
 const express = require("express");
 const crypto = require("crypto");
-const Alert = require("../models/Alert");
-const Shop = require("../models/Shop");
-const { sendWhatsApp } = require("../utils/sendWhatsApp");
-
+const axios = require("axios");
 const router = express.Router();
 
-const {
-  SHOPIFY_API_SECRET,
-  HMAC_MODE = "lenient",
-  SKIP_HMAC = "false",
-} = process.env;
+const Subscriber = require("../models/Subscriber");
+const Shop = require("../models/Shop");
+const { registerWebhooks } = require("../utils/registerWebhooks");
+const { getAccessToken } = require("../utils/shopifyApi");
 
-const isTrue = (v) => String(v).toLowerCase() === "true";
+const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
+const API_VERSION = process.env.SHOPIFY_API_VERSION || "2024-04";
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN;
+const WHATSAPP_SENDER    = process.env.WHATSAPP_SENDER;        // e.g. whatsapp:+16037165050
+const WHATSAPP_TEMPLATE_SID = process.env.WHATSAPP_TEMPLATE_SID;
 
-// Capture raw body for HMAC verification
-const rawBodySaver = (req, res, buf) => {
-  if (buf && buf.length) {
-    req.rawBody = buf.toString("utf8");
-  }
-};
-
-router.use(express.json({ verify: rawBodySaver, limit: "2mb" }));
-
-function verifyHmacFromHeader(req) {
-  const shopifyHmac = req.get("x-shopify-hmac-sha256");
-  if (!shopifyHmac || !req.rawBody) return false;
-
-  const digest = crypto
-    .createHmac("sha256", SHOPIFY_API_SECRET)
-    .update(req.rawBody, "utf8")
-    .digest("base64");
-
-  return crypto.timingSafeEqual(
-    Buffer.from(digest),
-    Buffer.from(shopifyHmac)
-  );
+let twilioClient = null;
+if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
+  twilioClient = require("twilio")(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 }
 
-router.post("/inventory", async (req, res) => {
-  const topic = req.get("x-shopify-topic") || "";
-  const shop = req.get("x-shopify-shop-domain") || "";
+function verifyShopifyWebhook(req) {
+  try {
+    const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
+    const digest = crypto.createHmac("sha256", SHOPIFY_API_SECRET)
+      .update(req.body) // Buffer (express.raw)
+      .digest("base64");
+    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
+  } catch {
+    return false;
+  }
+}
 
-  console.log("Webhook received:", { topic, shop });
-  const strict = String(HMAC_MODE).toLowerCase() === "strict";
-  const skip = isTrue(SKIP_HMAC);
-  const hmacOk = verifyHmacFromHeader(req);
+async function sendWhatsApp(to, variables = {}) {
+  if (!twilioClient) throw new Error("Twilio client not configured");
+  if (!WHATSAPP_SENDER) throw new Error("WHATSAPP_SENDER not set (e.g. whatsapp:+1...)");
 
-  console.log("HMAC valid:", hmacOk);
-
-  if (!hmacOk) {
-    if (skip) {
-      console.warn("HMAC invalid, but SKIP_HMAC=true so continuing");
-    } else if (strict) {
-      console.error("HMAC invalid (strict mode) — rejecting request");
-      return res.status(401).send("invalid hmac");
-    } else {
-      console.warn("HMAC invalid (lenient) — continuing");
-    }
+  // Prefer Content API with approved template
+  if (WHATSAPP_TEMPLATE_SID) {
+    return twilioClient.messages.create({
+      from: WHATSAPP_SENDER,
+      to: `whatsapp:${String(to).replace(/^whatsapp:/, "")}`,
+      contentSid: WHATSAPP_TEMPLATE_SID,
+      contentVariables: JSON.stringify(variables || {}),
+    });
   }
 
-  res.status(200).send("ok");
+  // Fallback body (works only in 24h customer window)
+  const body = variables?.["1"]
+    ? `Good news! "${variables["1"]}" is back in stock.`
+    : "Good news! Your item is back in stock.";
+  return twilioClient.messages.create({
+    from: WHATSAPP_SENDER,
+    to: `whatsapp:${String(to).replace(/^whatsapp:/, "")}`,
+    body,
+  });
+}
 
+async function handleInventoryEvent(shop, inventoryItemId, available) {
+  if (!shop || !inventoryItemId) return { notified: 0, reason: "missing_fields" };
+  if (typeof available === "number" && available <= 0) return { notified: 0, reason: "not_available" };
+
+  const subs = await Subscriber.find({ shop, inventoryItemId: String(inventoryItemId) }).lean();
+  if (!subs.length) return { notified: 0, reason: "no_subscribers" };
+
+  let ok = 0;
+  for (const s of subs) {
+    try {
+      const vars = {
+        1: s.productTitle || "Your item",
+        2: s.productUrl || "",
+      };
+      await sendWhatsApp(s.phone, vars);
+      await Subscriber.deleteOne({ _id: s._id }); // delete or mark sent
+      ok++;
+    } catch (e) {
+      console.error("[WEBHOOK] Twilio send error:", e?.response?.data || e.message);
+      // keep sub for later retry
+    }
+  }
+  return { notified: ok, reason: "sent" };
+}
+
+/* ========= HMAC-verified Shopify webhook ========= */
+router.post("/inventory", async (req, res) => {
   try {
-    const body = req.body || {};
-    let inventory_item_id = null;
-    let available = null;
-
-    if (topic === "inventory_levels/update") {
-      inventory_item_id = String(body.inventory_item_id || "");
-      available = typeof body.available === "number" ? body.available : null;
+    if (!verifyShopifyWebhook(req)) {
+      console.warn("[WEBHOOK] inventory: HMAC failed");
+      return res.sendStatus(401);
     }
+    const shop = req.get("X-Shopify-Shop-Domain") || "";
+    let payload = {};
+    try { payload = JSON.parse(req.body.toString("utf8")); } catch (e) { /* ignore */ }
 
-    console.log("Inventory update for:", inventory_item_id, "available:", available);
+    const itemId = payload?.inventory_item_id;
+    const available = payload?.available;
 
-    if (!inventory_item_id || !(available > 0)) {
-      console.log("Skipping: not a valid restock event or availability <= 0");
-      return;
-    }
+    const result = await handleInventoryEvent(shop, itemId, available);
+    console.log(`[WEBHOOK] inventory: item ${itemId} ->`, result);
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error("[WEBHOOK] inventory error:", e.message);
+    return res.sendStatus(200); // ack to stop retries
+  }
+});
 
-    // Check pending alerts
-    const pending = await Alert.find({
-      shop,
-      inventory_item_id,
-      sent: { $ne: true },
-    }).lean();
+/* ========= Utilities (no HMAC) ========= */
 
-    console.log(`Pending alerts count: ${pending.length}`);
-    if (pending.length === 0) return;
+// Quick health
+router.get("/status", (_req, res) => res.json({ ok: true, route: "webhooks", expectsRaw: true }));
 
-    const now = new Date();
-    const sixtySecondsAgo = new Date(now.getTime() - 60 * 1000);
-
-    const recent = await Alert.findOne({
-      shop,
-      inventory_item_id,
-      sentAt: { $gte: sixtySecondsAgo },
+// List webhooks for a shop
+router.get("/list", async (req, res) => {
+  try {
+    const shop = (req.query.shop || "").trim();
+    if (!shop) return res.status(400).json({ ok: false, error: "Missing shop" });
+    const token = await getAccessToken(shop);
+    const { data } = await axios.get(`https://${shop}/admin/api/${API_VERSION}/webhooks.json`, {
+      headers: { "X-Shopify-Access-Token": token },
     });
+    res.json({ ok: true, count: (data.webhooks || []).length, webhooks: data.webhooks || [] });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
-    if (recent) {
-      console.log("Alert already sent recently — skipping");
-      return;
-    }
+// Force (re)register webhooks now
+router.post("/register", async (req, res) => {
+  try {
+    const shop = (req.query.shop || "").trim();
+    if (!shop) return res.status(400).json({ ok: false, error: "Missing shop" });
+    const token = await getAccessToken(shop);
+    const regs = await registerWebhooks(shop, token, process.env.HOST);
+    res.json({ ok: true, regs });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
-    const productId =
-      body.product_id || body.id || pending[0]?.productId || null;
+// Dev trigger to simulate a restock (no HMAC) – great for testing end-to-end
+router.post("/dev/trigger", async (req, res) => {
+  try {
+    const shop = (req.query.shop || "").trim();
+    const itemId = req.query.inventory_item_id;
+    const available = Number(req.query.available || "1");
+    if (!shop || !itemId) return res.status(400).json({ ok: false, error: "Missing shop or inventory_item_id" });
 
-    const productUrl = productId
-      ? `https://${shop}/products/${productId}`
-      : `https://${shop}`;
-
-    let sentCount = 0;
-
-    for (const a of pending) {
-      const to = a.phone.startsWith("whatsapp:") ? a.phone : `whatsapp:${a.phone}`;
-      const msgUrl = productUrl;
-
-      console.log("Sending WhatsApp to:", to, "for product:", productUrl);
-
-      try {
-        const resp = await sendWhatsApp(to, msgUrl);
-        console.log("WhatsApp sent SID:", resp.sid);
-
-        await Alert.updateOne(
-          { _id: a._id },
-          { $set: { sent: true, sentAt: now } }
-        );
-
-        sentCount++;
-      } catch (err) {
-        console.error("Twilio error code/message:", err.code, err.message || String(err));
-      }
-    }
-
-    console.log(`Completed sending: ${sentCount}/${pending.length}`);
-  } catch (err) {
-    console.error("Error processing webhook:", err.stack || err);
+    const result = await handleInventoryEvent(shop, itemId, available);
+    res.json({ ok: true, result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
