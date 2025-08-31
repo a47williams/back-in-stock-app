@@ -2,17 +2,42 @@
 const express = require("express");
 const router = express.Router();
 const Subscriber = require("../models/Subscriber");
-const { getVariantInventoryId } = require("../utils/shopifyApi"); // must exist
+const { getVariantInventoryId } = require("../utils/shopifyApi");
+
+/** Try to infer shop domain when 'shop' isn't provided */
+function inferShopFromHeaders(req) {
+  // Priority: explicit query ?shop=..., then Referer host if it's *.myshopify.com
+  const q = (req.query.shop || "").trim().toLowerCase();
+  if (q) return q;
+
+  try {
+    const ref = req.get("referer") || req.get("origin") || "";
+    const h = new URL(ref).hostname.toLowerCase();
+    if (h.endsWith(".myshopify.com")) return h; // use permanent domain
+  } catch (_) {}
+  return "";
+}
 
 router.post("/subscribe", async (req, res) => {
   try {
-    const { shop, productId, variantId, phone, productTitle, productUrl } = req.body || {};
+    let { shop, productId, variantId, phone, productTitle, productUrl } = req.body || {};
 
-    if (!shop || !productId || !phone) {
-      return res.status(400).json({ success: false, message: "Missing fields" });
+    // Normalize inputs
+    shop = (shop || inferShopFromHeaders(req) || "").toLowerCase();
+    productId = productId ? String(productId) : null;
+    variantId = variantId ? String(variantId) : null;
+    phone = phone ? String(phone).trim() : "";
+
+    // New: accept productId OR variantId, but phone and shop are required
+    if (!shop || !phone || (!productId && !variantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing fields",
+        need: { shop: !!shop, phone: !!phone, productId: !!productId, variantId: !!variantId }
+      });
     }
 
-    // best-effort get inventory_item_id for webhook matching
+    // Best-effort: resolve inventory_item_id when we have a variantId
     let inventoryItemId = null;
     try {
       if (variantId) {
@@ -23,37 +48,35 @@ router.post("/subscribe", async (req, res) => {
       console.warn("[subscribe] inventory lookup failed:", e.message);
     }
 
-    const normalized = {
-      shop: String(shop).toLowerCase(),
-      productId: String(productId),
-      variantId: variantId ? String(variantId) : null,
-      inventoryItemId: inventoryItemId ? String(inventoryItemId) : null,
-      phone: String(phone),
-
+    const upsertDoc = {
+      shop,
+      phone,
+      productId,
+      variantId,
+      inventoryItemId,
       productTitle: productTitle || null,
       productUrl: productUrl || null,
-
       awaitingReply: false,
       templateSentAt: null,
     };
 
-    // Upsert by (shop, phone, variantId or productId)
-    const query = normalized.variantId
-      ? { shop: normalized.shop, phone: normalized.phone, variantId: normalized.variantId }
-      : { shop: normalized.shop, phone: normalized.phone, productId: normalized.productId };
+    // Upsert by (shop, phone, variantId?) so multiple products/variants per phone are allowed
+    const query = variantId
+      ? { shop, phone, variantId }
+      : { shop, phone, productId };
 
-    const doc = await Subscriber.findOneAndUpdate(
+    const saved = await Subscriber.findOneAndUpdate(
       query,
-      { $set: normalized },
+      { $set: upsertDoc },
       { upsert: true, new: true }
     );
 
     console.log("[BIS] subscribed:", {
-      shop: doc.shop,
-      id: String(doc._id),
-      productId: doc.productId,
-      variantId: doc.variantId,
-      inventoryItemId: doc.inventoryItemId,
+      shop: saved.shop,
+      id: String(saved._id),
+      productId: saved.productId,
+      variantId: saved.variantId,
+      inventoryItemId: saved.inventoryItemId,
     });
 
     return res.status(200).json({ success: true, message: "You’re subscribed!" });
