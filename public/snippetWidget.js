@@ -1,186 +1,178 @@
-// public/snippetWidget.js
+/* Back-in-Stock WhatsApp Widget (public/snippetWidget.js) */
 (function () {
-  // NOTE: we no longer bail if a Liquid block exists—duplicates are handled by using a single #back-in-stock-widget
-  if (window.__BIS_WIDGET_INIT__) return;
+  if (window.__BIS_WIDGET_INIT__) return; // prevent double-init
   window.__BIS_WIDGET_INIT__ = true;
 
-  const API_HOST = "https://back-in-stock-app.onrender.com";
-  const WIDGET_ID = "back-in-stock-widget";
+  const API_BASE = "https://back-in-stock-app.onrender.com";
 
-  function log(){ try{ console.debug("[BIS]", ...arguments); }catch{} }
+  const qs = (sel, root) => (root || document).querySelector(sel);
 
-  function getProduct() { return window?.Shopify?.product || null; }
-  function productForms() { return Array.from(document.querySelectorAll('form[action*="/cart/add"]')); }
-  function visibleProductForm() {
-    const forms = productForms();
-    return forms.find(f => f.offsetParent !== null) || forms[0] || null;
-  }
-  function variantIdInput() {
-    const form = visibleProductForm();
-    return (
-      (form && (form.querySelector('input[name="id"]') || form.querySelector('select[name="id"]'))) ||
-      document.querySelector('input[name="id"]') ||
-      document.querySelector('select[name="id"]')
-    );
-  }
-  function currentVariantId() {
-    const input = variantIdInput();
-    if (!input) return null;
-    const val = input.value || input.getAttribute("value");
-    const id = parseInt(val, 10);
-    return Number.isFinite(id) ? id : null;
-  }
-  function findVariantById(id) {
-    const p = getProduct();
-    if (!p || !Array.isArray(p.variants)) return null;
-    return p.variants.find(v => Number(v.id) === Number(id)) || null;
-  }
-  function atcButton() {
-    return (
-      document.querySelector('form[action*="/cart/add"] [type="submit"]') ||
-      document.querySelector('button[name="add"]') ||
-      document.querySelector('button.add-to-cart') ||
-      null
-    );
-  }
-  function isSelectedVariantSoldOut() {
-    const vid = currentVariantId();
-    const v = vid ? findVariantById(vid) : null;
-
-    if (v && typeof v.available === "boolean") {
-      const out = v.available === false;
-      log("availability via Shopify.product", { vid, available: v.available, out });
-      return out;
-    }
-
-    const atc = atcButton();
-    if (atc) {
-      const disabled = atc.disabled || atc.hasAttribute("disabled");
-      const label = (atc.innerText || atc.value || "").toLowerCase();
-      const out = disabled || /sold\s*out|unavailable/.test(label);
-      log("availability via ATC fallback", { disabled, label, out });
-      return out;
-    }
-
-    log("availability unknown -> hide");
-    return false;
+  function getVariantId() {
+    const idInput =
+      qs('form[action*="/cart/add"] [name="id"]') ||
+      qs('input[name="id"]') ||
+      qs('select[name="id"]');
+    if (idInput && idInput.value) return String(idInput.value);
+    const fromShopify = window.Shopify?.product?.selected_or_first_available_variant?.id;
+    return fromShopify ? String(fromShopify) : null;
   }
 
-  function ensureSingleContainer() {
-    const all = Array.from(document.querySelectorAll(`#${CSS.escape(WIDGET_ID)}`));
-    if (all.length > 1) for (let i = 1; i < all.length; i++) all[i].remove();
-    return all[0] || null;
+  function isSoldOut() {
+    // Try reading the Add-to-cart button state/label
+    const atc =
+      qs('form[action*="/cart/add"] [type="submit"]') ||
+      qs('button[name="add"]') ||
+      qs('button.add-to-cart') ||
+      qs('[data-add-to-cart]');
+    if (!atc) return false;
+    const disabled = atc.disabled || atc.hasAttribute('disabled');
+    const label = (atc.innerText || atc.value || '').toLowerCase();
+    return disabled || label.includes('sold out') || label.includes('unavailable');
   }
-  function createContainer() {
-    const c = document.createElement("div");
-    c.id = WIDGET_ID;
-    c.style.marginTop = "20px";
-    c.style.display = "none";
-    c.innerHTML = `
-      <div style="border: 1px solid #ccc; padding: 15px; max-width: 400px;">
-        <h3>Get notified when this is back</h3>
+
+  function ensureContainer() {
+    let root = document.getElementById("back-in-stock-widget");
+    if (root) return root;
+
+    root = document.createElement("div");
+    root.id = "back-in-stock-widget";
+    root.style.marginTop = "20px";
+    root.innerHTML = `
+      <div style="border:1px solid #d1d5db;padding:14px;border-radius:12px;max-width:420px;">
+        <h3 style="margin:0 0 6px;font-weight:700;">Get notified when this is back</h3>
         <form id="bis-form">
-          <label for="bis-phone">WhatsApp number</label><br>
-          <input type="tel" id="bis-phone" placeholder="+15551234567" required style="width: 100%; margin: 10px 0;" />
-          <button type="submit" style="width: 100%; padding: 10px; background: black; color: white;">Notify me</button>
-          <p id="bis-msg" style="margin-top: 10px;"></p>
+          <label for="bis-phone" style="font-size:13px;color:#555;">WhatsApp number</label><br/>
+          <input type="tel" id="bis-phone" placeholder="+15551234567" required
+                 style="width:100%;margin:8px 0 10px;padding:10px;border:1px solid #d1d5db;border-radius:10px;"/>
+          <button type="submit" style="width:100%;padding:10px;background:#111827;color:#fff;border:0;border-radius:10px;">
+            Notify me
+          </button>
+          <p id="bis-msg" style="margin-top:10px;font-size:14px;"></p>
         </form>
-      </div>
-    `;
-    return c;
-  }
-  function mountContainer() {
-    let container = ensureSingleContainer();
-    if (!container) {
-      container = createContainer();
-      const form = visibleProductForm();
-      if (form?.parentNode) form.parentNode.insertBefore(container, form.nextSibling);
-      else document.body.appendChild(container);
+      </div>`;
+
+    const targetForm = qs('form[action*="/cart/add"]');
+    if (targetForm && targetForm.parentNode) {
+      targetForm.parentNode.insertBefore(root, targetForm.nextSibling);
+    } else {
+      const btn = qs('button[name="add"]') || qs('button.add-to-cart');
+      if (btn && btn.parentNode) btn.parentNode.insertBefore(root, btn.nextSibling);
+      else document.body.appendChild(root);
     }
-    ensureSingleContainer();
-    wireForm(container);
-    return container;
+    return root;
   }
 
-  function wireForm(container) {
-    const form = container.querySelector("#bis-form");
-    const phone = container.querySelector("#bis-phone");
-    const msg = container.querySelector("#bis-msg");
-    if (!form || form.__bisBound) return;
-    form.__bisBound = true;
-
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const value = (phone.value || "").trim();
-      if (!/^\+\d{7,15}$/.test(value.replace(/\s+/g, ""))) {
-        msg.textContent = "Please enter a valid phone number.";
-        return;
-      }
-      msg.textContent = "Saving...";
-
-      try {
-        const productId = getProduct()?.id || null;
-        const variantId = currentVariantId();
-        const shopDomain = window?.Shopify?.shop || window?.Shopify?.checkout?.shopify_domain;
-
-        const res = await fetch(`${API_HOST}/widget/subscribe`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ shop: shopDomain, productId, variantId, phone: value }),
-        });
-
-        const text = await res.text();
-        let data = {};
-        try { data = text ? JSON.parse(text) : {}; } catch {}
-        if (res.ok) {
-          msg.textContent = data.message || "🎉 You’re subscribed!";
-          form.reset();
-        } else {
-          msg.textContent = data.message || "Subscription failed.";
-        }
-      } catch (err) {
-        msg.textContent = "Error saving alert.";
-        console.error("[BIS] submit error:", err);
-      }
-    });
+  function updateVisibility(root) {
+    root.style.display = isSoldOut() ? "block" : "none";
   }
 
-  function render() {
-    const container = mountContainer();
-    const show = isSelectedVariantSoldOut();
-    container.style.display = show ? "block" : "none";
-    log("render", { show, vid: currentVariantId() });
+  function productTitle() {
+    return (
+      window.Shopify?.product?.title ||
+      qs('meta[property="og:title"]')?.content ||
+      document.title ||
+      "this item"
+    );
   }
 
-  function bindWatchers() {
-    const form = visibleProductForm();
-    if (form) {
-      form.addEventListener("change", (e) => {
-        const t = e.target;
-        if (!t) return;
-        if (t.name === "id" || t.matches('select[name^="options"]') || t.matches('input[name^="options"]')) {
-          setTimeout(render, 0);
-        }
+  function productUrl() {
+    const canonical = qs('link[rel="canonical"]')?.href;
+    const href = (canonical || location.href).split('#')[0].split('?')[0];
+    return href;
+  }
+
+  function getShop() {
+    return (
+      window.Shopify?.shop ||
+      window.Shopify?.config?.shop ||
+      location.hostname
+    );
+  }
+
+  function normalizePhone(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (s.startsWith('+')) return s;
+    const digits = s.replace(/[^\d]/g, '');
+    return digits ? ('+' + digits) : '';
+  }
+
+  async function onSubmit(e) {
+    e.preventDefault();
+    const msgEl = document.getElementById("bis-msg");
+    const phoneInput = document.getElementById("bis-phone");
+
+    const phone = normalizePhone(phoneInput.value);
+    if (!/^\+\d{7,15}$/.test(phone)) {
+      msgEl.textContent = "Please enter a valid phone (e.g., +15551234567).";
+      msgEl.style.color = "#b91c1c";
+      return;
+    }
+
+    const shop = getShop();
+    const variantId = getVariantId();
+    const productId = window.Shopify?.product?.id ? String(window.Shopify.product.id) : null;
+
+    msgEl.textContent = "Saving…";
+    msgEl.style.color = "#374151";
+
+    try {
+      const res = await fetch(API_BASE + "/widget/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          productId,
+          variantId,
+          phone,
+          productTitle: productTitle(),
+          productUrl: productUrl()
+        })
       });
-      const idInput = variantIdInput();
-      if (idInput && "MutationObserver" in window) {
-        new MutationObserver(() => render()).observe(idInput, { attributes: true, attributeFilter: ["value"] });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.success) {
+        msgEl.textContent = data.message || "You’re subscribed!";
+        msgEl.style.color = "#065f46";
+        e.target.reset();
+      } else {
+        msgEl.textContent = (data && (data.message || data.error)) || "Subscription failed.";
+        msgEl.style.color = "#b91c1c";
       }
+    } catch (err) {
+      console.error("BIS subscribe error:", err);
+      msgEl.textContent = "Network error. Please try again.";
+      msgEl.style.color = "#b91c1c";
     }
-    document.addEventListener("variant:changed", () => setTimeout(render, 0), { passive: true });
-    document.addEventListener("product:variant-change", () => setTimeout(render, 0), { passive: true });
   }
 
   function init() {
-    // Initial + safety re-renders in case theme fills id late
-    setTimeout(render, 0);
-    bindWatchers();
-    setTimeout(render, 150);
-    setTimeout(render, 500);
-    setTimeout(render, 1200);
-    setTimeout(render, 2000);
+    const root = ensureContainer();
+    updateVisibility(root);
+
+    // Re-check visibility on variant changes
+    ["change", "variant:changed"].forEach(evt => {
+      document.addEventListener(evt, () => setTimeout(() => updateVisibility(root), 0), true);
+    });
+
+    // Observe ATC button mutations (themes flip disabled/text)
+    const atc =
+      qs('form[action*="/cart/add"] [type="submit"]') ||
+      qs('button[name="add"]') ||
+      qs('button.add-to-cart');
+    if (atc && "MutationObserver" in window) {
+      new MutationObserver(() => updateVisibility(root))
+        .observe(atc, { attributes: true, childList: true, subtree: true });
+    }
+
+    const form = document.getElementById("bis-form");
+    form && form.addEventListener("submit", onSubmit);
+
+    // safety re-checks as theme scripts settle
+    setTimeout(() => updateVisibility(root), 150);
+    setTimeout(() => updateVisibility(root), 600);
   }
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-  else init();
+  document.readyState === "loading"
+    ? document.addEventListener("DOMContentLoaded", init)
+    : init();
 })();
