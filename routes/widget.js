@@ -6,17 +6,34 @@ const { getVariantInventoryId } = require("../utils/shopifyApi");
 
 /** Try to infer shop domain when 'shop' isn't provided */
 function inferShopFromHeaders(req) {
-  // Priority: explicit query ?shop=..., then Referer host if it's *.myshopify.com
   const q = (req.query.shop || "").trim().toLowerCase();
   if (q) return q;
-
   try {
     const ref = req.get("referer") || req.get("origin") || "";
     const h = new URL(ref).hostname.toLowerCase();
-    if (h.endsWith(".myshopify.com")) return h; // use permanent domain
+    if (h.endsWith(".myshopify.com")) return h;
   } catch (_) {}
   return "";
 }
+
+router.get("/status", (_req, res) => res.json({ ok: true, route: "widget" }));
+
+router.get("/debug", async (req, res) => {
+  try {
+    const shop = (req.query.shop || inferShopFromHeaders(req) || "").toLowerCase();
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit || "10", 10)));
+    if (!shop) return res.status(400).json({ ok: false, error: "Missing shop" });
+
+    const rows = await Subscriber.find({ shop })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    res.json({ ok: true, count: rows.length, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 router.post("/subscribe", async (req, res) => {
   try {
@@ -28,7 +45,7 @@ router.post("/subscribe", async (req, res) => {
     variantId = variantId ? String(variantId) : null;
     phone = phone ? String(phone).trim() : "";
 
-    // New: accept productId OR variantId, but phone and shop are required
+    // Accept productId OR variantId, but phone and shop are required
     if (!shop || !phone || (!productId && !variantId)) {
       return res.status(400).json({
         success: false,
