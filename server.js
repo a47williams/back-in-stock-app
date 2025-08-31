@@ -14,6 +14,7 @@ const themeRoutes = require("./routes/theme");
 const stripeWebhookRoutes = require("./routes/stripeWebhook");
 const checkoutRoutes = require("./routes/checkout");
 const twilioRoutes = require("./routes/twilio"); // <-- NEW
+const widgetRoutes = require("./routes/widget");
 
 const { dbReady } = require("./db");
 const Shop = require("./models/Shop");
@@ -46,6 +47,7 @@ app.use("/uninstall", uninstallRoutes);
 app.use("/theme", themeRoutes);
 app.use("/checkout", checkoutRoutes);
 app.use("/twilio", twilioRoutes); // <-- NEW
+app.use("/widget", widgetRoutes);
 
 // Embedded UI
 app.get("/settings", (req, res) => {
