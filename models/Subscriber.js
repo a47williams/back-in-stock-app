@@ -6,23 +6,24 @@ const SubscriberSchema = new mongoose.Schema(
     shop: { type: String, required: true, index: true },
     phone: { type: String, required: true, index: true },
 
-    productId: { type: String, default: null, index: true },
-    variantId: { type: String, default: null, index: true },
-    inventoryItemId: { type: String, default: null, index: true },
+    productId: { type: String, index: true },
+    variantId: { type: String, index: true },
+    inventoryItemId: { type: String, index: true },
 
-    // optional (handy for WhatsApp template variables)
+    // For nicer messages & follow-up link
     productTitle: { type: String, default: null },
+    // Store URL; can be encoded or plain – we decode when sending
     productUrl: { type: String, default: null },
 
-    sentAt: { type: Date, default: null },
+    // Two-step flow state
+    awaitingReply: { type: Boolean, default: false }, // true after we send the ping template
+    templateSentAt: { type: Date, default: null },    // when ping was sent
+    lastInboundAt: { type: Date, default: null },     // last user inbound msg timestamp
   },
-  { timestamps: true } // adds createdAt / updatedAt
+  { timestamps: true, strict: false } // strict:false prevents schema errors from older rows
 );
 
-// fast lookups
-SubscriberSchema.index({ shop: 1, inventoryItemId: 1 });
-SubscriberSchema.index({ shop: 1, variantId: 1 });
-SubscriberSchema.index({ shop: 1, productId: 1 });
+// Helpful index (not unique: allow multiple variants per phone)
+SubscriberSchema.index({ shop: 1, phone: 1, variantId: 1 });
 
-module.exports =
-  mongoose.models.Subscriber || mongoose.model("Subscriber", SubscriberSchema);
+module.exports = mongoose.model("Subscriber", SubscriberSchema);

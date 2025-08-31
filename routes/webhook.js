@@ -8,104 +8,73 @@ const Subscriber = require("../models/Subscriber");
 const { registerWebhooks } = require("../utils/registerWebhooks");
 const { getAccessToken } = require("../utils/shopifyApi");
 
-/* ====== ENV ====== */
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
 const API_VERSION = process.env.SHOPIFY_API_VERSION || "2024-04";
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const WHATSAPP_SENDER = process.env.WHATSAPP_SENDER;               // e.g. "whatsapp:+16037165050" (we normalize anyway)
-const WHATSAPP_TEMPLATE_SID = process.env.WHATSAPP_TEMPLATE_SID;   // e.g. "HXxxxxxxxxxxxxxxxxxxxx"
-const WHATSAPP_MESSAGING_SERVICE_SID = process.env.WHATSAPP_MESSAGING_SERVICE_SID; // optional MG SID
+const TWILIO_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN;
+const WHATSAPP_SENDER    = process.env.WHATSAPP_SENDER;           // "whatsapp:+16037165050"
+const TEMPLATE_NAME      = process.env.WHATSAPP_TEMPLATE_NAME;    // e.g., "restock_ping_en"
+const TEMPLATE_LANG      = process.env.WHATSAPP_TEMPLATE_LANG || "en";
 
-/* ====== Twilio client ====== */
 let twilioClient = null;
 if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
   twilioClient = require("twilio")(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 }
 
-/* ====== Helpers ====== */
-
+/* ---------- Helpers ---------- */
 function verifyShopifyWebhook(req) {
   try {
     const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
-    const digest = crypto.createHmac("sha256", SHOPIFY_API_SECRET)
-      .update(req.body) // MUST be Buffer; mount router with express.raw({ type: "application/json" })
-      .digest("base64");
+    // accept Buffer OR object body
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}), "utf8");
+    const digest = crypto.createHmac("sha256", SHOPIFY_API_SECRET).update(raw).digest("base64");
     return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
   } catch {
     return false;
   }
 }
 
-function normalizeShop(shop) {
-  return String(shop || "").trim().toLowerCase();
+function normalizeWpAddr(val) {
+  const s = String(val || "").trim();
+  return s.startsWith("whatsapp:") ? s : `whatsapp:${s}`;
 }
 
-/**
- * Normalize WhatsApp "from" and "to" addresses and send a message.
- * Uses Content API with an approved template if WHATSAPP_TEMPLATE_SID is set.
- * Falls back to a simple body (may fail outside 24h window).
- */
-async function sendWhatsApp(to, variables = {}) {
+/** Send an approved WhatsApp template (no variables) by name */
+async function sendTemplatePing(to) {
   if (!twilioClient) throw new Error("Twilio client not configured");
-  if (!WHATSAPP_SENDER && !WHATSAPP_MESSAGING_SERVICE_SID) {
-    throw new Error("Missing WHATSAPP_SENDER or WHATSAPP_MESSAGING_SERVICE_SID");
-  }
+  if (!WHATSAPP_SENDER) throw new Error("WHATSAPP_SENDER missing");
+  if (!TEMPLATE_NAME) throw new Error("WHATSAPP_TEMPLATE_NAME missing");
 
-  const fromRaw = String(WHATSAPP_SENDER || "").trim();
-  const from = fromRaw ? (fromRaw.startsWith("whatsapp:") ? fromRaw : `whatsapp:${fromRaw}`) : null;
-  const toRaw = String(to || "").trim();
-  const toWp = toRaw.startsWith("whatsapp:") ? toRaw : `whatsapp:${toRaw}`;
-
-  // Prefer Content API (approved template)
-  if (WHATSAPP_TEMPLATE_SID) {
-    const payload = {
-      to: toWp,
-      contentSid: WHATSAPP_TEMPLATE_SID,
-      contentVariables: JSON.stringify(variables || {}),
-    };
-    if (WHATSAPP_MESSAGING_SERVICE_SID) {
-      payload.messagingServiceSid = WHATSAPP_MESSAGING_SERVICE_SID;
-    } else {
-      payload.from = from; // direct sender
-    }
-    const resp = await twilioClient.messages.create(payload);
-    return { sid: resp.sid, status: resp.status };
-  }
-
-  // Fallback: free-text (works only in 24h customer window)
-  const body = variables?.["1"]
-    ? `Good news! "${variables["1"]}" is back in stock.`
-    : "Good news! Your item is back in stock.";
-  const payload = { to: toWp, body };
-  if (WHATSAPP_MESSAGING_SERVICE_SID) {
-    payload.messagingServiceSid = WHATSAPP_MESSAGING_SERVICE_SID;
-  } else {
-    payload.from = from;
+  const payload = {
+    from: normalizeWpAddr(WHATSAPP_SENDER),
+    to: normalizeWpAddr(to),
+    template: {
+      name: TEMPLATE_NAME,
+      language: { code: TEMPLATE_LANG },
+      // No components because this template has NO variables
+    },
+  };
+  if (process.env.WHATSAPP_MESSAGING_SERVICE_SID) {
+    payload.messagingServiceSid = process.env.WHATSAPP_MESSAGING_SERVICE_SID;
   }
   const resp = await twilioClient.messages.create(payload);
   return { sid: resp.sid, status: resp.status };
 }
 
-/** Find subscribers by shop + inventory_item_id (handles string/number + shop case) */
+/** Find subs for a given inventory item id (string/number tolerant) */
 async function findSubsByInventoryItem(shop, inventoryItemId) {
-  const shopNorm = normalizeShop(shop);
-  const sid = String(inventoryItemId || "").trim();
-  const numericCandidate = /^\d+$/.test(sid) ? String(Number(sid)) : null;
-  const inSet = [sid];
-  if (numericCandidate && numericCandidate !== sid) inSet.push(numericCandidate);
-
+  const s = String(shop || "").toLowerCase();
+  const idRaw = String(inventoryItemId || "").trim();
+  const numeric = /^\d+$/.test(idRaw) ? String(Number(idRaw)) : null;
+  const inSet = numeric && numeric !== idRaw ? [idRaw, numeric] : [idRaw];
   return Subscriber.find({
-    shop: { $in: [shop, shopNorm] },
+    shop: { $in: [s, shop] },
     inventoryItemId: { $in: inSet },
   }).lean();
 }
 
-/**
- * Notify subscribers and optionally return detailed results for debugging.
- * @returns { notified, attempted, failures: [{_id, phone, error}], reason }
- */
+/** Main notifier: send ping template; wait for user reply to send URL link */
 async function handleInventoryEvent(shop, inventoryItemId, available, { debug = false } = {}) {
   if (!shop || !inventoryItemId) return { notified: 0, attempted: 0, failures: [], reason: "missing_fields" };
   if (typeof available === "number" && available <= 0) return { notified: 0, attempted: 0, failures: [], reason: "not_available" };
@@ -118,38 +87,38 @@ async function handleInventoryEvent(shop, inventoryItemId, available, { debug = 
 
   for (const s of subs) {
     try {
-      const vars = {
-        1: s.productTitle || "Your item",
-        2: s.productUrl || "",
-      };
-      const resp = await sendWhatsApp(s.phone, vars);
-      console.log("[WEBHOOK] Twilio sent SID:", resp.sid, "status:", resp.status, "to:", s.phone);
-      await Subscriber.deleteOne({ _id: s._id }); // delete after send to avoid re-sending
+      const resp = await sendTemplatePing(s.phone);
+      console.log("[WEBHOOK] ping template SID:", resp.sid, "to:", s.phone);
+
+      // Keep row for follow-up; mark awaiting reply
+      await Subscriber.updateOne(
+        { _id: s._id },
+        { $set: { awaitingReply: true, templateSentAt: new Date() } }
+      );
+
       ok++;
     } catch (e) {
       const errMsg = e?.response?.data ? JSON.stringify(e.response.data) : e.message;
-      console.error("[WEBHOOK] Twilio send error:", errMsg, "to:", s.phone);
+      console.error("[WEBHOOK] ping send error:", errMsg, "to:", s.phone);
       failures.push({ _id: String(s._id), phone: s.phone, error: errMsg });
-      // keep sub for retry later
+      // keep the row for retry later
     }
   }
 
   const result = {
-    notified: ok,
+    notified: ok,              // number of pings sent
     attempted: subs.length,
     failures,
-    reason: ok > 0 ? "sent" : (failures.length ? "twilio_failed" : "unknown"),
+    reason: ok > 0 ? "ping_sent" : (failures.length ? "twilio_failed" : "unknown"),
   };
   return debug ? result : { notified: result.notified, reason: result.reason };
 }
 
-/* ====== HMAC-verified Shopify webhook handlers ====== */
+/* ---------- Webhook routes ---------- */
 
-/**
- * Topic: inventory_levels/update
- * URL:   POST /webhooks/inventory
- * NOTE: Mount with express.raw({ type: "application/json" }) in server.js
- */
+// Shopify: inventory_levels/update (HMAC verified)
+// NOTE: Ideally mount with express.raw({ type: 'application/json' }) for perfect HMAC;
+// our verify tolerates parsed JSON as well.
 router.post("/inventory", async (req, res) => {
   try {
     if (!verifyShopifyWebhook(req)) {
@@ -158,8 +127,7 @@ router.post("/inventory", async (req, res) => {
     }
     const shop = req.get("X-Shopify-Shop-Domain") || "";
     let payload = {};
-    try { payload = JSON.parse(req.body.toString("utf8")); } catch {}
-
+    try { payload = typeof req.body === "object" ? req.body : JSON.parse(req.body.toString("utf8")); } catch {}
     const itemId = payload?.inventory_item_id;
     const available = payload?.available;
 
@@ -168,16 +136,14 @@ router.post("/inventory", async (req, res) => {
     return res.sendStatus(200);
   } catch (e) {
     console.error("[WEBHOOK] inventory error:", e.message);
-    return res.sendStatus(200); // ack to stop retries
+    return res.sendStatus(200);
   }
 });
 
-/* ====== Utilities (no HMAC) ====== */
+/* Utilities (no HMAC) */
 
-// Health
-router.get("/status", (_req, res) => res.json({ ok: true, route: "webhooks", expectsRaw: true }));
+router.get("/status", (_req, res) => res.json({ ok: true, route: "webhooks" }));
 
-// List webhooks for a shop
 router.get("/list", async (req, res) => {
   try {
     const shop = (req.query.shop || "").trim();
@@ -192,20 +158,7 @@ router.get("/list", async (req, res) => {
   }
 });
 
-// (Re)register webhooks right now
-router.post("/register", async (req, res) => {
-  try {
-    const shop = (req.query.shop || "").trim();
-    if (!shop) return res.status(400).json({ ok: false, error: "Missing shop" });
-    const token = await getAccessToken(shop);
-    const regs = await registerWebhooks(shop, token, process.env.HOST);
-    res.json({ ok: true, regs });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Dev: lookup subs for an inventory_item_id (diagnostic)
+// Dev helpers
 router.get("/dev/lookup", async (req, res) => {
   try {
     const shop = (req.query.shop || "").trim();
@@ -218,7 +171,6 @@ router.get("/dev/lookup", async (req, res) => {
   }
 });
 
-// Dev: simulate a restock (no HMAC). Add &debug=1 to see per-subscriber failures.
 router.post("/dev/trigger", async (req, res) => {
   try {
     const shop = (req.query.shop || "").trim();
