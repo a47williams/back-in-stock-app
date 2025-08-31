@@ -5,7 +5,6 @@ const axios = require("axios");
 const router = express.Router();
 
 const Subscriber = require("../models/Subscriber");
-const { registerWebhooks } = require("../utils/registerWebhooks"); // if you use it elsewhere
 const { getAccessToken } = require("../utils/shopifyApi");
 
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
@@ -13,33 +12,21 @@ const API_VERSION = process.env.SHOPIFY_API_VERSION || "2024-04";
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN;
-const WHATSAPP_SENDER    = process.env.WHATSAPP_SENDER;            // e.g. "whatsapp:+16037165050"
-const CONTENT_SID        = process.env.WHATSAPP_TEMPLATE_SID;      // HX... from Twilio Content Template
-const MSG_SERVICE_SID    = process.env.WHATSAPP_MESSAGING_SERVICE_SID; // optional MG...
 
 let twilioClient = null;
 if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
   twilioClient = require("twilio")(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 }
 
-/* --------------------------------- helpers -------------------------------- */
+/* ---------------- helpers ---------------- */
 
 function verifyShopifyWebhook(req) {
   try {
     const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
-    // If body is already parsed, stringify; if raw Buffer, use it as-is.
-    const raw =
-      Buffer.isBuffer(req.body)
-        ? req.body
-        : Buffer.from(JSON.stringify(req.body || {}), "utf8");
-
-    const digest = crypto
-      .createHmac("sha256", SHOPIFY_API_SECRET)
-      .update(raw)
-      .digest("base64");
-
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}), "utf8");
+    const digest = crypto.createHmac("sha256", SHOPIFY_API_SECRET).update(raw).digest("base64");
     return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
-  } catch (e) {
+  } catch {
     return false;
   }
 }
@@ -53,26 +40,37 @@ function normalizeWpAddr(val) {
  *  Prefers Twilio Content SID (HX...). Falls back to plain body (session-only). */
 async function sendTemplatePing(to) {
   if (!twilioClient) throw new Error("Twilio client not configured");
-  if (!WHATSAPP_SENDER) throw new Error("WHATSAPP_SENDER missing");
 
-  const from = normalizeWpAddr(WHATSAPP_SENDER);
+  const senderRaw = process.env.WHATSAPP_SENDER;
+  if (!senderRaw) throw new Error("WHATSAPP_SENDER missing");
+  const from = normalizeWpAddr(senderRaw);
   const toWp = normalizeWpAddr(to);
 
-  if (CONTENT_SID) {
-    const payload = { from, to: toWp, contentSid: CONTENT_SID };
-    if (MSG_SERVICE_SID) payload.messagingServiceSid = MSG_SERVICE_SID;
+  // READ ENV AT CALL TIME (not at module load)
+  const contentSid = (process.env.WHATSAPP_TEMPLATE_SID || "").trim(); // HX...
+  const msid = (process.env.WHATSAPP_MESSAGING_SERVICE_SID || "").trim();
+
+  if (contentSid) {
+    const payload = { to: toWp, from, contentSid };
+    if (msid) payload.messagingServiceSid = msid;
+
+    console.log("[WEBHOOK] sending via Content SID:",
+      contentSid.slice(0, 6) + "…",
+      "from:", from,
+      "msid:", msid ? "yes" : "no"
+    );
+
     const resp = await twilioClient.messages.create(payload);
     return { sid: resp.sid, status: resp.status, via: "contentSid" };
   }
 
-  // Fallback (only works if user messaged you in last 24h)
-  console.warn("[WEBHOOK] No WHATSAPP_TEMPLATE_SID set — sending plain text fallback.");
+  // Fallback (24h session only)
   const body = "The item you asked about is available again. Reply YES to get the link.";
+  console.warn("[WEBHOOK] No WHATSAPP_TEMPLATE_SID set — sending plain text fallback.");
   const resp = await twilioClient.messages.create({ from, to: toWp, body });
   return { sid: resp.sid, status: resp.status, via: "body" };
 }
 
-/** Find subscribers for a given inventory_item_id */
 async function findSubsByInventoryItem(shop, inventoryItemId) {
   const shopKey = String(shop || "").toLowerCase();
   const raw = String(inventoryItemId || "").trim();
@@ -85,7 +83,6 @@ async function findSubsByInventoryItem(shop, inventoryItemId) {
   }).lean();
 }
 
-/** Main notifier used by real webhooks and dev trigger */
 async function handleInventoryEvent(shop, inventoryItemId, available, { debug = false } = {}) {
   if (!shop || !inventoryItemId) {
     return { notified: 0, attempted: 0, failures: [], reason: "missing_fields" };
@@ -103,9 +100,8 @@ async function handleInventoryEvent(shop, inventoryItemId, available, { debug = 
   for (const s of subs) {
     try {
       const resp = await sendTemplatePing(s.phone);
-      console.log("[WEBHOOK] ping template sent:", resp.sid, "to:", s.phone);
+      console.log("[WEBHOOK] ping sent:", resp.sid, "via:", resp.via, "to:", s.phone);
 
-      // keep record; wait for YES; inbound will send the link then delete
       await Subscriber.updateOne(
         { _id: s._id },
         { $set: { awaitingReply: true, templateSentAt: new Date() } }
@@ -116,7 +112,6 @@ async function handleInventoryEvent(shop, inventoryItemId, available, { debug = 
       const errMsg = e?.response?.data ? JSON.stringify(e.response.data) : e.message;
       console.error("[WEBHOOK] ping send error:", errMsg, "to:", s.phone);
       failures.push({ _id: String(s._id), phone: s.phone, error: errMsg });
-      // keep the row for retry
     }
   }
 
@@ -129,22 +124,16 @@ async function handleInventoryEvent(shop, inventoryItemId, available, { debug = 
   return debug ? result : { notified: result.notified, reason: result.reason };
 }
 
-/* --------------------------------- routes --------------------------------- */
+/* ---------------- routes ---------------- */
 
-// Shopify inventory webhook (inventory_levels/update)
+// Shopify inventory webhook (HMAC verified)
 router.post("/inventory", async (req, res) => {
   try {
-    if (!verifyShopifyWebhook(req)) {
-      console.warn("[WEBHOOK] inventory: HMAC failed");
-      return res.sendStatus(401);
-    }
+    if (!verifyShopifyWebhook(req)) return res.sendStatus(401);
     const shop = req.get("X-Shopify-Shop-Domain") || "";
 
-    // Body may be object or Buffer (depending on server.js parser); normalize
     let payload = {};
-    try {
-      payload = typeof req.body === "object" ? req.body : JSON.parse(req.body.toString("utf8"));
-    } catch (_) {}
+    try { payload = typeof req.body === "object" ? req.body : JSON.parse(req.body.toString("utf8")); } catch {}
 
     const itemId = payload?.inventory_item_id;
     const available = payload?.available;
@@ -154,14 +143,14 @@ router.post("/inventory", async (req, res) => {
     return res.sendStatus(200);
   } catch (e) {
     console.error("[WEBHOOK] inventory error:", e.message);
-    return res.sendStatus(200); // acknowledge so Shopify doesn't retry forever
+    return res.sendStatus(200);
   }
 });
 
-// Simple health
+// Health
 router.get("/status", (_req, res) => res.json({ ok: true, route: "webhooks" }));
 
-// List registered Shopify webhooks (useful sanity check)
+// List Shopify webhooks
 router.get("/list", async (req, res) => {
   try {
     const shop = (req.query.shop || "").trim();
@@ -177,32 +166,42 @@ router.get("/list", async (req, res) => {
   }
 });
 
-// Dev helper: see which subs we will hit for a given inventory_item_id
-router.get("/dev/lookup", async (req, res) => {
-  try {
-    const shop = (req.query.shop || "").trim();
-    const itemId = req.query.inventory_item_id;
-    if (!shop || !itemId) return res.status(400).json({ ok: false, error: "Missing shop or inventory_item_id" });
+/* ---------- Dev diagnostics ---------- */
 
-    const subs = await findSubsByInventoryItem(shop, itemId);
-    res.json({ ok: true, count: subs.length, subs });
+// See env presence (booleans only)
+router.get("/dev/env", (_req, res) => {
+  res.json({
+    ok: true,
+    env: {
+      TWILIO_ACCOUNT_SID: !!process.env.TWILIO_ACCOUNT_SID,
+      TWILIO_AUTH_TOKEN:  !!process.env.TWILIO_AUTH_TOKEN,
+      WHATSAPP_SENDER:    process.env.WHATSAPP_SENDER || null,
+      WHATSAPP_TEMPLATE_SID: !!process.env.WHATSAPP_TEMPLATE_SID,
+      WHATSAPP_MESSAGING_SERVICE_SID: !!process.env.WHATSAPP_MESSAGING_SERVICE_SID,
+    }
+  });
+});
+
+// Directly send the template ping to a phone (bypass DB)
+router.post("/dev/ping", async (req, res) => {
+  try {
+    const to = (req.query.to || req.body?.to || "").trim();
+    if (!to) return res.status(400).json({ ok: false, error: "Missing ?to=+E164" });
+    const resp = await sendTemplatePing(to);
+    res.json({ ok: true, resp });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e?.response?.data || e.message });
   }
 });
 
-// Dev helper: trigger a restock event manually
+// Manual restock trigger
 router.post("/dev/trigger", async (req, res) => {
   try {
     const shop = (req.query.shop || "").trim();
     const itemId = req.query.inventory_item_id;
     const available = Number(req.query.available || "1");
     const debug = req.query.debug === "1";
-
-    if (!shop || !itemId) {
-      return res.status(400).json({ ok: false, error: "Missing shop or inventory_item_id" });
-    }
-
+    if (!shop || !itemId) return res.status(400).json({ ok: false, error: "Missing shop or inventory_item_id" });
     const result = await handleInventoryEvent(shop, itemId, available, { debug });
     res.json({ ok: true, result });
   } catch (e) {
