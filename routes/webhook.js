@@ -18,12 +18,15 @@ if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
   twilioClient = require("twilio")(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 }
 
-/* ---------------- helpers ---------------- */
+/* ========================== helpers ========================== */
 
 function verifyShopifyWebhook(req) {
   try {
     const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
-    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}), "utf8");
+    // When this route uses express.raw, req.body is a Buffer.
+    const raw = Buffer.isBuffer(req.body)
+      ? req.body
+      : Buffer.from(JSON.stringify(req.body || {}), "utf8");
     const digest = crypto.createHmac("sha256", SHOPIFY_API_SECRET).update(raw).digest("base64");
     return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
   } catch {
@@ -31,42 +34,34 @@ function verifyShopifyWebhook(req) {
   }
 }
 
-function normalizeWpAddr(val) {
+function normalizeWp(val) {
   const s = String(val || "").trim();
   return s.startsWith("whatsapp:") ? s : `whatsapp:${s}`;
 }
 
-/** Send approved WhatsApp template.
- *  Prefers Twilio Content SID (HX...). Falls back to plain body (session-only). */
+/** Send approved WhatsApp template via Twilio Content SID (HX…).
+ * Falls back to plain text (24-hour session) if SID missing. */
 async function sendTemplatePing(to) {
   if (!twilioClient) throw new Error("Twilio client not configured");
-
   const senderRaw = process.env.WHATSAPP_SENDER;
   if (!senderRaw) throw new Error("WHATSAPP_SENDER missing");
-  const from = normalizeWpAddr(senderRaw);
-  const toWp = normalizeWpAddr(to);
 
-  // READ ENV AT CALL TIME (not at module load)
-  const contentSid = (process.env.WHATSAPP_TEMPLATE_SID || "").trim(); // HX...
+  const from = normalizeWp(senderRaw);
+  const toWp = normalizeWp(to);
+
+  const contentSid = (process.env.WHATSAPP_TEMPLATE_SID || "").trim(); // HX…
   const msid = (process.env.WHATSAPP_MESSAGING_SERVICE_SID || "").trim();
 
   if (contentSid) {
-    const payload = { to: toWp, from, contentSid };
+    const payload = { from, to: toWp, contentSid };
     if (msid) payload.messagingServiceSid = msid;
-
-    console.log("[WEBHOOK] sending via Content SID:",
-      contentSid.slice(0, 6) + "…",
-      "from:", from,
-      "msid:", msid ? "yes" : "no"
-    );
-
+    console.log("[WEBHOOK] sending via Content SID:", contentSid.slice(0, 6) + "…", "msid:", !!msid);
     const resp = await twilioClient.messages.create(payload);
     return { sid: resp.sid, status: resp.status, via: "contentSid" };
   }
 
-  // Fallback (24h session only)
-  const body = "The item you asked about is available again. Reply YES to get the link.";
   console.warn("[WEBHOOK] No WHATSAPP_TEMPLATE_SID set — sending plain text fallback.");
+  const body = "The item you asked about is available again. Reply YES to get the link.";
   const resp = await twilioClient.messages.create({ from, to: toWp, body });
   return { sid: resp.sid, status: resp.status, via: "body" };
 }
@@ -75,11 +70,11 @@ async function findSubsByInventoryItem(shop, inventoryItemId) {
   const shopKey = String(shop || "").toLowerCase();
   const raw = String(inventoryItemId || "").trim();
   const numeric = /^\d+$/.test(raw) ? String(Number(raw)) : null;
-  const inSet = numeric && numeric !== raw ? [raw, numeric] : [raw];
+  const set = numeric && numeric !== raw ? [raw, numeric] : [raw];
 
   return Subscriber.find({
     shop: { $in: [shopKey, shop] },
-    inventoryItemId: { $in: inSet },
+    inventoryItemId: { $in: set },
   }).lean();
 }
 
@@ -124,16 +119,20 @@ async function handleInventoryEvent(shop, inventoryItemId, available, { debug = 
   return debug ? result : { notified: result.notified, reason: result.reason };
 }
 
-/* ---------------- routes ---------------- */
+/* ========================== routes ========================== */
 
-// Shopify inventory webhook (HMAC verified)
-router.post("/inventory", async (req, res) => {
+/** Shopify inventory_levels/update webhook
+ *  Use raw body so HMAC check matches Shopify’s signature. */
+router.post("/inventory", express.raw({ type: "application/json" }), async (req, res) => {
   try {
-    if (!verifyShopifyWebhook(req)) return res.sendStatus(401);
+    if (!verifyShopifyWebhook(req)) {
+      console.warn("[WEBHOOK] inventory: HMAC failed");
+      return res.sendStatus(401);
+    }
     const shop = req.get("X-Shopify-Shop-Domain") || "";
 
     let payload = {};
-    try { payload = typeof req.body === "object" ? req.body : JSON.parse(req.body.toString("utf8")); } catch {}
+    try { payload = JSON.parse(req.body.toString("utf8")); } catch {}
 
     const itemId = payload?.inventory_item_id;
     const available = payload?.available;
@@ -143,14 +142,14 @@ router.post("/inventory", async (req, res) => {
     return res.sendStatus(200);
   } catch (e) {
     console.error("[WEBHOOK] inventory error:", e.message);
-    return res.sendStatus(200);
+    return res.sendStatus(200); // acknowledge so Shopify doesn't retry repeatedly
   }
 });
 
-// Health
+// health
 router.get("/status", (_req, res) => res.json({ ok: true, route: "webhooks" }));
 
-// List Shopify webhooks
+// list Shopify webhooks
 router.get("/list", async (req, res) => {
   try {
     const shop = (req.query.shop || "").trim();
@@ -166,9 +165,9 @@ router.get("/list", async (req, res) => {
   }
 });
 
-/* ---------- Dev diagnostics ---------- */
+/* ---------------- Dev diagnostics (safe) ---------------- */
 
-// See env presence (booleans only)
+// env presence (booleans only)
 router.get("/dev/env", (_req, res) => {
   res.json({
     ok: true,
@@ -182,7 +181,7 @@ router.get("/dev/env", (_req, res) => {
   });
 });
 
-// Directly send the template ping to a phone (bypass DB)
+// directly send the template to a number (bypasses DB)
 router.post("/dev/ping", async (req, res) => {
   try {
     const to = (req.query.to || req.body?.to || "").trim();
@@ -194,7 +193,7 @@ router.post("/dev/ping", async (req, res) => {
   }
 });
 
-// Manual restock trigger
+// manual restock trigger
 router.post("/dev/trigger", async (req, res) => {
   try {
     const shop = (req.query.shop || "").trim();
